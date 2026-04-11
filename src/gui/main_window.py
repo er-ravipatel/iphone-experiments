@@ -9,9 +9,11 @@ from __future__ import annotations
 
 from datetime import datetime
 
+from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
     QStackedWidget, QLabel, QPushButton, QFrame, QPlainTextEdit,
+    QSystemTrayIcon,
     QSizePolicy,
 )
 from PySide6.QtCore import Qt, QTimer, QThread, Signal
@@ -19,6 +21,7 @@ from PySide6.QtCore import Qt, QTimer, QThread, Signal
 from ..core.results import ServiceResult
 from ..device.info import DeviceInfo
 from ..services.device_service import DeviceService
+from .tray import AppTray
 from .widgets.device_header import DeviceHeader
 from .pages.dashboard_page import DashboardPage
 from .pages.diagnostics_page import DiagnosticsPage
@@ -77,12 +80,18 @@ class MainWindow(QMainWindow):
         self._worker: _DeviceInfoWorker | None = None
         self._nav_buttons: list[QPushButton] = []
         self._active_page = _PAGE_DASHBOARD
+        self._poll_count = 0
+        self._last_connected_udid: str | None = None
+        self._last_battery_alert_level: int | None = None
+        self._low_storage_alerted = False
 
         self.setWindowTitle("iPhone Storage Explorer")
         self.setMinimumSize(1100, 700)
         self.resize(1280, 800)
+        self.setWindowIcon(QGuiApplication.windowIcon())
 
         self._build_ui()
+        self._tray = AppTray(self, self.windowIcon())
         self._navigate(_PAGE_DASHBOARD)
         self._start_polling()
 
@@ -238,6 +247,7 @@ class MainWindow(QMainWindow):
         if self._worker and self._worker.isRunning():
             return  # info fetch in progress — wait
 
+        self._poll_count += 1
         udids = self._service.list_devices()
 
         if not udids:
@@ -247,8 +257,12 @@ class MainWindow(QMainWindow):
                 self._on_disconnected()
         else:
             udid = udids[0]
-            if self._current_info is None or self._current_info.udid != udid:
-                # New or different device — fetch info
+            if (
+                self._current_info is None
+                or self._current_info.udid != udid
+                or self._poll_count % 6 == 0
+            ):
+                # New device or periodic refresh
                 self._on_connecting(udid)
 
     def _on_connecting(self, udid: str) -> None:
@@ -267,6 +281,7 @@ class MainWindow(QMainWindow):
     def _on_info_received(self, result: ServiceResult) -> None:
         if result.success:
             info: DeviceInfo = result.data
+            previous = self._current_info
             self._current_info = info
             self._header.show_device(info)
             self._dash_page.show_device(info)
@@ -274,11 +289,13 @@ class MainWindow(QMainWindow):
             self._shot_page.show_device(info)
             self._apps_page.show_device(info)
             self._media_page.show_device(info)
+            self._update_tray_tooltip(info)
             self._log_msg(
                 f"Connected  {info.name}   {info.model}   iOS {info.ios_version}   "
                 f"Battery {info.battery_level}%   "
                 f"Storage {info.used_storage_gb}/{info.total_storage_gb} GB"
             )
+            self._notify_device_state(previous, info)
         else:
             self._log_msg(f"Could not read device: {result.error}")
             self._header.show_no_device()
@@ -287,6 +304,7 @@ class MainWindow(QMainWindow):
             self._shot_page.show_no_device()
             self._apps_page.show_no_device()
             self._media_page.show_no_device()
+            self._tray.set_tooltip("iPhone Storage Explorer\nNo device connected")
 
     def _on_disconnected(self) -> None:
         self._log_msg("Device disconnected.")
@@ -296,11 +314,86 @@ class MainWindow(QMainWindow):
         self._shot_page.show_no_device()
         self._apps_page.show_no_device()
         self._media_page.show_no_device()
+        if self._last_connected_udid is not None:
+            self._tray.show_message(
+                "iPhone disconnected",
+                "The connected iPhone is no longer available over USB.",
+                QSystemTrayIcon.Warning,
+                7000,
+            )
+        self._tray.set_tooltip("iPhone Storage Explorer\nNo device connected")
+        self._last_connected_udid = None
+        self._last_battery_alert_level = None
+        self._low_storage_alerted = False
 
     def _on_refresh(self) -> None:
         self._log_msg("Refresh requested.")
         self._current_info = None
         self._poll_device()
+
+    def _update_tray_tooltip(self, info: DeviceInfo) -> None:
+        charge = "Charging" if info.battery_charging else "Battery"
+        self._tray.set_tooltip(
+            "iPhone Storage Explorer\n"
+            f"{info.name} ({info.model})\n"
+            f"{charge}: {info.battery_level}%\n"
+            f"Free storage: {info.free_storage_gb} GB"
+        )
+
+    def _notify_device_state(self, previous: DeviceInfo | None, current: DeviceInfo) -> None:
+        app_state = QGuiApplication.applicationState()
+        should_toast = app_state != Qt.ApplicationActive
+
+        if previous is None or previous.udid != current.udid:
+            self._last_connected_udid = current.udid
+            if should_toast:
+                self._tray.show_message(
+                    "iPhone connected",
+                    (
+                        f"{current.name} ({current.model})\n"
+                        f"Battery: {current.battery_level}%"
+                        f"{' charging' if current.battery_charging else ''}\n"
+                        f"Free storage: {current.free_storage_gb} GB"
+                    ),
+                    QSystemTrayIcon.Information,
+                    9000,
+                )
+
+        battery_alert = None
+        if not current.battery_charging:
+            if current.battery_level <= 10:
+                battery_alert = 10
+            elif current.battery_level <= 20:
+                battery_alert = 20
+
+        if battery_alert is not None and battery_alert != self._last_battery_alert_level:
+            self._last_battery_alert_level = battery_alert
+            self._tray.show_message(
+                "Low iPhone battery",
+                (
+                    f"{current.name} is at {current.battery_level}% battery.\n"
+                    "Plug it in soon to keep exports and backups stable."
+                ),
+                QSystemTrayIcon.Warning,
+                8000,
+            )
+        elif battery_alert is None:
+            self._last_battery_alert_level = None
+
+        low_storage_now = current.free_storage_gb <= 10 or current.storage_percent_used >= 90
+        if low_storage_now and not self._low_storage_alerted:
+            self._low_storage_alerted = True
+            self._tray.show_message(
+                "iPhone storage running low",
+                (
+                    f"{current.name} has {current.free_storage_gb} GB free "
+                    f"({current.storage_percent_used}% used)."
+                ),
+                QSystemTrayIcon.Warning,
+                8000,
+            )
+        elif not low_storage_now:
+            self._low_storage_alerted = False
 
     # ── Activity log ────────────────────────────────────────────────────────
 
@@ -319,4 +412,5 @@ class MainWindow(QMainWindow):
         if shot_worker and shot_worker.isRunning():
             shot_worker.quit()
             shot_worker.wait(2000)
+        self._tray.close()
         super().closeEvent(event)

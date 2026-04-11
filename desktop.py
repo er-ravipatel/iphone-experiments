@@ -10,11 +10,18 @@ The original terminal app remains fully intact:
 import os
 import sys
 import pathlib
+import ctypes
 
 # Force UTF-8 on Windows terminals
 if sys.platform == "win32":
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    try:
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+            "iphone.experiments.desktop"
+        )
+    except Exception:
+        pass
 
 # Inject bundled libimobiledevice tools directory into PATH (same as main.py)
 _TOOLS_DIR = str(pathlib.Path.home() / "libimobiledevice")

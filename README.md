@@ -2,6 +2,13 @@
 
 Cross-platform iPhone management tool with both a terminal CLI and a full PySide6 desktop GUI.
 
+## Workspace Status
+
+- Active workspace path: `C:\Workspace\Personal\iphone-experiments`
+- Active repository: `iphone-experiments`
+- Active development branch: `feature-desktop-ui`
+- Old mistaken workspace copy under `C:\Workspace\Personal\iphone-storage-explorer\iphone-experiments` is no longer active and has been removed.
+
 ## Entry Points
 
 | Mode | Command |
@@ -11,6 +18,9 @@ Cross-platform iPhone management tool with both a terminal CLI and a full PySide
 
 ## Desktop GUI Features
 
+- Desktop app icon with permanent Windows `.ico` asset in `assets/`
+- System tray integration with device connect/disconnect notifications
+- Battery and storage status notifications for the connected device
 - Live device detection and auto-connect (polls every 2.5 s)
 - Dashboard — battery, storage, connectivity cards
 - Diagnostics — full device info table
@@ -104,8 +114,13 @@ For screenshot and mirroring-related developer services, you may also need:
 
 `master` contains the full working codebase.
 
+Current active branch for ongoing GUI work:
+
+- `feature-desktop-ui`
+
 Feature branches are available for grouped areas of the project:
 
+- `feature-desktop-ui`
 - `feature-files`
 - `feature-apps`
 - `feature-media`
@@ -122,3 +137,4 @@ Feature branches are available for grouped areas of the project:
 
 - `scripts/debug/` contains troubleshooting PowerShell scripts used during development.
 - The screen mirror window is currently a setup and orchestration scaffold. The live frame rendering backend is still to be integrated.
+- Desktop branding assets live under `assets/app-icon.svg`, `assets/app-icon.png`, and `assets/app-icon.ico`.

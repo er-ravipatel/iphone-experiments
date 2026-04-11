@@ -1,5 +1,12 @@
 # Project Context
 
+## Active Workspace
+
+- Current working repo path: `C:\Workspace\Personal\iphone-experiments`
+- Current active branch: `feature-desktop-ui`
+- This repo is the source of truth for ongoing work.
+- The earlier mistaken copy under `C:\Workspace\Personal\iphone-storage-explorer\iphone-experiments` is no longer in use and has been removed.
+
 ## Goal
 
 This repository explores a terminal-first iPhone management tool for Windows and other desktop platforms. The main direction is to keep the terminal app as the control center while using separate windows only when a richer visual surface is required, such as screen mirroring.
@@ -18,6 +25,8 @@ Entry point: `desktop.py` → `src/gui/main_window.py`
 - Device polling runs on a `QTimer` (2.5 s interval, main thread, cheap `idevice_id` call).
 - Device info fetching runs on a `_DeviceInfoWorker(QThread)`.
 - **Every page exposes `abort_all()`** — called by `MainWindow._navigate()` before switching pages so running workers are cancelled and the outgoing page is cleanly stopped.
+- Desktop app branding now uses generated icon assets stored in `assets/`.
+- System tray support is wired through `src/gui/tray.py` and used by `MainWindow`.
 
 ### Pages
 
@@ -28,6 +37,15 @@ Entry point: `desktop.py` → `src/gui/main_window.py`
 | Screenshot | 2 | `src/gui/pages/screenshot_page.py` |
 | Apps | 3 | `src/gui/pages/apps_page.py` |
 | Photos & Videos | 4 | `src/gui/pages/media_page.py` |
+
+### Desktop Branding / Notifications
+
+- App icon source: `assets/app-icon.svg`
+- Generated Windows assets: `assets/app-icon.png`, `assets/app-icon.ico`
+- Icon generator: `src/gui/icon.py`
+- Tray manager: `src/gui/tray.py`
+- `desktop.py` sets a Windows AppUserModelID for better taskbar grouping
+- `MainWindow` shows tray notifications for device connected, device disconnected, low battery, and low storage
 
 ### Threading Rules (critical)
 

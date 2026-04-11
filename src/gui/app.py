@@ -5,8 +5,10 @@ Import create_app() in desktop.py before any other Qt imports.
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 from PySide6.QtWidgets import QApplication
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QFont, QIcon
+from .icon import create_app_icon, write_icon_files
 
 
 # ── Stylesheet ─────────────────────────────────────────────────────────────────
@@ -199,6 +201,11 @@ def create_app(argv: list[str]) -> QApplication:
     app.setApplicationName("iPhone Storage Explorer")
     app.setApplicationVersion("1.0.0")
     app.setOrganizationName("iphone-experiments")
+    asset_dir = Path(__file__).resolve().parents[2] / "assets"
+    write_icon_files(asset_dir)
+    ico_path = asset_dir / "app-icon.ico"
+    app_icon = QIcon(str(ico_path)) if ico_path.exists() else create_app_icon()
+    app.setWindowIcon(app_icon)
     font = QFont("Segoe UI", 10)
     app.setFont(font)
     app.setStyleSheet(STYLESHEET)
