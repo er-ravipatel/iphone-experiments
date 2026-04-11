@@ -5,8 +5,8 @@ from pathlib import Path
 from rich.table import Table
 from rich import box
 
-from ..device.info import DeviceInfo
-from ..utils.runner import run, run_streaming
+from ...device.info import DeviceInfo
+from ...utils.runner import run, run_streaming
 from ..ui.menu import (
     console, print_section, print_success, print_error, print_info,
     prompt_path, prompt_choice, confirm, confirm_action,

@@ -16,8 +16,8 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import messagebox
 
-from ..device.info import DeviceInfo
-from ..utils.runner import run
+from ...device.info import DeviceInfo
+from ...utils.runner import run
 
 
 def _check_dev_mode(udid: str) -> tuple[str, str]:

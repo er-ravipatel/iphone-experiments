@@ -1,7 +1,7 @@
 """
 Rename the connected device using idevicename.
 """
-from ..utils.runner import run
+from ...utils.runner import run
 from ..ui.menu import console, print_success, print_error, prompt_path, confirm_action, pause
 
 

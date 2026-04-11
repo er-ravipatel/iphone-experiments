@@ -5,8 +5,8 @@ from rich.table import Table
 from rich.panel import Panel
 from rich import box
 
-from ..device.info import DeviceInfo
-from ..utils.runner import run
+from ...device.info import DeviceInfo
+from ...utils.runner import run
 from ..ui.menu import console, print_success, print_error, print_info, confirm_action, pause
 
 

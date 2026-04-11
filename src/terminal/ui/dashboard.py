@@ -8,7 +8,7 @@ from rich.columns import Columns
 from rich.text import Text
 from rich import box
 
-from ..device.info import DeviceInfo
+from ...device.info import DeviceInfo
 
 console = Console()
 

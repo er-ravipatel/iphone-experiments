@@ -26,19 +26,19 @@ from rich.console import Console
 from src.utils.platform import check_tools, install_instructions
 from src.device.detector import list_devices
 from src.device.info import get_device_info, DeviceInfo
-from src.ui.dashboard import render_device_dashboard, render_no_device, render_tools_missing
-from src.ui.menu import (
+from src.terminal.ui.dashboard import render_device_dashboard, render_no_device, render_tools_missing
+from src.terminal.ui.menu import (
     render_main_menu, prompt_choice, prompt_choice_watching,
     print_error, print_info, print_success, console
 )
-from src.features.diagnostics import diagnostics_menu
-from src.features.apps import apps_menu
-from src.features.backup import backup_menu
-from src.features.media import media_menu
-from src.features.files import files_menu
-from src.features.screenshot import take_screenshot
-from src.features.rename import rename_device
-from src.features.mirror import open_mirror_window
+from src.terminal.features.diagnostics import diagnostics_menu
+from src.terminal.features.apps import apps_menu
+from src.terminal.features.backup import backup_menu
+from src.terminal.features.media import media_menu
+from src.terminal.features.files import files_menu
+from src.terminal.features.screenshot import take_screenshot
+from src.terminal.features.rename import rename_device
+from src.terminal.features.mirror import open_mirror_window
 
 POLL_INTERVAL = 2  # seconds between device polls when no device is connected
 

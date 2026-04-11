@@ -4,7 +4,7 @@ Capture a screenshot from the connected device.
 import time
 from pathlib import Path
 
-from ..utils.runner import run
+from ...utils.runner import run
 from ..ui.menu import console, print_success, print_error, print_info, prompt_path, pause
 from ..ui.progress import spinner
 
