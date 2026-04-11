@@ -22,6 +22,9 @@ from ..services.device_service import DeviceService
 from .widgets.device_header import DeviceHeader
 from .pages.dashboard_page import DashboardPage
 from .pages.diagnostics_page import DiagnosticsPage
+from .pages.screenshot_page import ScreenshotPage
+from .pages.apps_page import AppsPage
+from .pages.media_page import MediaPage
 
 
 # ── Background worker ──────────────────────────────────────────────────────────
@@ -44,19 +47,22 @@ class _DeviceInfoWorker(QThread):
 
 _PAGE_DASHBOARD   = 0
 _PAGE_DIAGNOSTICS = 1
+_PAGE_SCREENSHOT  = 2
+_PAGE_APPS        = 3
+_PAGE_MEDIA       = 4
 
 # (label, page_index_or_None, enabled)
 _NAV_ITEMS: list[tuple[str, int | None, bool]] = [
     ("Dashboard",        _PAGE_DASHBOARD,   True),
     ("Diagnostics",      _PAGE_DIAGNOSTICS, True),
-    # ── Milestone 2+ ──────────────────────────────
-    ("Files",            None,              False),
-    ("Apps",             None,              False),
-    ("Photos & Videos",  None,              False),
-    ("Backup & Restore", None,              False),
-    ("Screenshot",       None,              False),
-    ("Screen Mirror",    None,              False),
-    ("Settings",         None,              False),
+    ("Screenshot",       _PAGE_SCREENSHOT,  True),
+    ("Apps",             _PAGE_APPS,        True),
+    ("Photos && Videos", _PAGE_MEDIA,       True),
+    # ── Milestone 5+ ──────────────────────────────
+    ("Files",             None,              False),
+    ("Backup && Restore", None,              False),
+    ("Screen Mirror",     None,              False),
+    ("Settings",          None,              False),
 ]
 
 
@@ -104,8 +110,14 @@ class MainWindow(QMainWindow):
         self._stack = QStackedWidget()
         self._dash_page = DashboardPage()
         self._diag_page = DiagnosticsPage()
+        self._shot_page = ScreenshotPage()
+        self._apps_page  = AppsPage()
+        self._media_page = MediaPage()
         self._stack.addWidget(self._dash_page)    # index 0
         self._stack.addWidget(self._diag_page)    # index 1
+        self._stack.addWidget(self._shot_page)    # index 2
+        self._stack.addWidget(self._apps_page)    # index 3
+        self._stack.addWidget(self._media_page)   # index 4
         body_hbox.addWidget(self._stack)
 
         root_vbox.addWidget(body, stretch=1)
@@ -201,6 +213,11 @@ class MainWindow(QMainWindow):
     # ── Navigation ─────────────────────────────────────────────────────────
 
     def _navigate(self, page_idx: int) -> None:
+        # Abort any running workers on the page we're leaving
+        outgoing = self._stack.currentWidget()
+        if outgoing is not None and hasattr(outgoing, "abort_all"):
+            outgoing.abort_all()
+
         self._active_page = page_idx
         self._stack.setCurrentIndex(page_idx)
 
@@ -239,6 +256,9 @@ class MainWindow(QMainWindow):
         self._header.show_connecting()
         self._dash_page.show_connecting()
         self._diag_page.show_connecting()
+        self._shot_page.show_connecting()
+        self._apps_page.show_connecting()
+        self._media_page.show_connecting()
 
         self._worker = _DeviceInfoWorker(udid, self._service)
         self._worker.finished.connect(self._on_info_received)
@@ -251,6 +271,9 @@ class MainWindow(QMainWindow):
             self._header.show_device(info)
             self._dash_page.show_device(info)
             self._diag_page.show_device(info)
+            self._shot_page.show_device(info)
+            self._apps_page.show_device(info)
+            self._media_page.show_device(info)
             self._log_msg(
                 f"Connected  {info.name}   {info.model}   iOS {info.ios_version}   "
                 f"Battery {info.battery_level}%   "
@@ -261,12 +284,18 @@ class MainWindow(QMainWindow):
             self._header.show_no_device()
             self._dash_page.show_no_device()
             self._diag_page.show_no_device()
+            self._shot_page.show_no_device()
+            self._apps_page.show_no_device()
+            self._media_page.show_no_device()
 
     def _on_disconnected(self) -> None:
         self._log_msg("Device disconnected.")
         self._header.show_no_device()
         self._dash_page.show_no_device()
         self._diag_page.show_no_device()
+        self._shot_page.show_no_device()
+        self._apps_page.show_no_device()
+        self._media_page.show_no_device()
 
     def _on_refresh(self) -> None:
         self._log_msg("Refresh requested.")
@@ -286,4 +315,8 @@ class MainWindow(QMainWindow):
         if self._worker and self._worker.isRunning():
             self._worker.quit()
             self._worker.wait(2000)
+        shot_worker = self._shot_page._worker
+        if shot_worker and shot_worker.isRunning():
+            shot_worker.quit()
+            shot_worker.wait(2000)
         super().closeEvent(event)

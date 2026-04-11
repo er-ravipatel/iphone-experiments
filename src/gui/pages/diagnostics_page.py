@@ -48,6 +48,10 @@ class DiagnosticsPage(QWidget):
 
     # ── State setters ──────────────────────────────────────────────────────
 
+    def abort_all(self) -> None:
+        """No background workers on this page — satisfies the common interface."""
+        pass
+
     def show_no_device(self) -> None:
         self._status.setText("No device connected.")
         self._table.setRowCount(0)

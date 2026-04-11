@@ -1,43 +1,69 @@
 # iphone-experiments
 
-Cross-platform iPhone management experiments built around a terminal-first workflow.
+Cross-platform iPhone management tool with both a terminal CLI and a full PySide6 desktop GUI.
 
-This project is a Python CLI application inspired by desktop iPhone utility tools. It detects a connected iPhone, shows device information in the terminal, and exposes interactive actions for file browsing, app management, media export, backup and restore, diagnostics, screenshots, device rename, and a screen mirror workflow scaffold.
+## Entry Points
 
-## Current Features
+| Mode | Command |
+|---|---|
+| Terminal CLI | `python main.py` |
+| Desktop GUI | `python desktop.py` |
 
-- Detect connected iPhones over USB
-- Show dashboard with model, iOS version, battery, and storage
-- Browse device files using AFC via `pymobiledevice3`
-- List, install, and uninstall apps
-- Export photos and videos from `DCIM`
-- Create and restore device backups
-- Run reboot and shutdown diagnostics
-- Capture screenshots when developer services are available
-- Rename the connected device
-- Open a dedicated screen mirror window scaffold with automated setup actions
+## Desktop GUI Features
+
+- Live device detection and auto-connect (polls every 2.5 s)
+- Dashboard — battery, storage, connectivity cards
+- Diagnostics — full device info table
+- Screenshot — capture and preview in-app
+- Apps — list user/system apps, install `.ipa`, uninstall
+- Photos & Videos — thumbnail grid browser with:
+  - Viewport-aware lazy loading (visible items first)
+  - HEIC thumbnail support via pillow-heif
+  - Video preview with built-in player (play/pause/seek)
+  - Video thumbnails via OpenCV (generated on first preview)
+  - Concurrent AFC stat calls for fast folder listing
+  - Thumbnail JPEG cache in `%TEMP%\iphone_explorer\`
+  - Export selected / all / all subfolders
+
+## Terminal CLI Features
+
+- Device dashboard (Rich)
+- File browsing and transfer via AFC
+- App listing, install, uninstall
+- Photo/video export from DCIM
+- Backup and restore
+- Diagnostics, reboot, shutdown
+- Screenshot capture
+- Device rename
+- Screen mirror scaffold with automated setup
 
 ## Tech Stack
 
 - Python 3.12
-- Rich for terminal UI
+- PySide6 — desktop GUI
+- Rich — terminal UI
+- `pymobiledevice3` — AFC, device services
 - `libimobiledevice` CLI tools
-- `pymobiledevice3` for modern device services and AFC access
-- Tkinter for the mirror viewer scaffold
+- pillow-heif — HEIC image decoding
+- opencv-python-headless — video frame extraction
 
 ## Project Structure
 
 ```text
 iphone-experiments/
-  main.py
+  main.py              ← terminal entry point
+  desktop.py           ← GUI entry point
   requirements.txt
   src/
+    gui/
+      main_window.py
+      pages/           ← one file per page
+      widgets/
     device/
-    features/
-    ui/
+    terminal/
+      features/        ← shared with terminal app
     utils/
-  scripts/
-    debug/
+  scripts/debug/
 ```
 
 ## Run Locally
@@ -48,7 +74,13 @@ Install dependencies:
 python -m pip install -r requirements.txt
 ```
 
-Run the app:
+Run the desktop GUI:
+
+```powershell
+python desktop.py
+```
+
+Run the terminal CLI:
 
 ```powershell
 python main.py

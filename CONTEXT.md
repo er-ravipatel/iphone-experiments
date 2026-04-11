@@ -4,156 +4,184 @@
 
 This repository explores a terminal-first iPhone management tool for Windows and other desktop platforms. The main direction is to keep the terminal app as the control center while using separate windows only when a richer visual surface is required, such as screen mirroring.
 
-## Current Product Shape
+A full **PySide6 desktop GUI** (`desktop.py`) has been built in parallel and is the primary active development surface.
 
-The app starts in the terminal, detects a connected iPhone, renders a dashboard, and presents an interactive menu.
+---
 
-Implemented feature areas:
+## Desktop GUI App (`desktop.py`)
 
-- device detection
-- device information parsing
-- dashboard and terminal navigation
-- file transfer and browsing
-- app management
-- media export
-- backup and restore
-- diagnostics
-- screenshot support
-- rename support
-- mirror window scaffold
+Entry point: `desktop.py` → `src/gui/main_window.py`
 
-## Main Runtime Flow
+### Architecture
 
-`main.py` is the entry point.
+- `MainWindow` hosts a sidebar nav, `QStackedWidget` for pages, and an activity log.
+- Device polling runs on a `QTimer` (2.5 s interval, main thread, cheap `idevice_id` call).
+- Device info fetching runs on a `_DeviceInfoWorker(QThread)`.
+- **Every page exposes `abort_all()`** — called by `MainWindow._navigate()` before switching pages so running workers are cancelled and the outgoing page is cleanly stopped.
+
+### Pages
+
+| Page | Index | File |
+|---|---|---|
+| Dashboard | 0 | `src/gui/pages/dashboard_page.py` |
+| Diagnostics | 1 | `src/gui/pages/diagnostics_page.py` |
+| Screenshot | 2 | `src/gui/pages/screenshot_page.py` |
+| Apps | 3 | `src/gui/pages/apps_page.py` |
+| Photos & Videos | 4 | `src/gui/pages/media_page.py` |
+
+### Threading Rules (critical)
+
+All pages follow these rules to prevent crashes:
+
+1. **`QPixmap` must only be created on the main thread.** Workers pass raw bytes or `QImage` via signals; `QPixmap.fromImage()` is called in the slot.
+2. **`_live_workers: set` keeps Python references** to all running QThread workers. Without this, Python GC can destroy a QThread while its OS thread is running → `QThread: Destroyed while thread is still running` crash.
+3. **Signal disconnect before worker replacement.** When starting a new `_ListDirWorker`, `_disconnect_list_worker()` is called first to prevent the old worker's stale `finished` signal from calling `_populate()` on top of fresh data.
+4. **No blocking `wait()` on main thread.** `_cancel_thumb_worker()` disconnects the signal immediately and sets `self._thumb_worker = None` — the thread runs to completion in the background, kept alive by `_live_workers`.
+5. **asyncio workers** (`_ThumbnailWorker`, `_ExportWorker`, etc.) use a `_stop` flag checked between loop iterations. Single-shot async calls (`_ListDirWorker`, `_ScanWorker`) discard results via signal disconnect or flag check.
+
+### MediaPage — Photos & Videos
+
+Key design decisions:
+
+**Directory listing (`_listdir` in `src/terminal/features/media.py`)**
+- `afc.listdir()` returns all names in one call.
+- `afc.stat()` is called concurrently (semaphore of 8) for all entries. Sequential stat was the biggest bottleneck: 300 files × ~15 ms = ~4.5 s. Concurrent stat brings it to ~0.5 s.
+
+**Thumbnail loading (`_ThumbnailWorker`)**
+- Grid items are populated with placeholder icons first (`setUpdatesEnabled(False/True)` suppresses per-item repaints for large folders).
+- `QTimer.singleShot(150, ...)` defers worker start so the grid layout has rendered and `_get_visible_rows()` returns accurate viewport data.
+- Visible rows are loaded first (priority set), background rows at ~20/sec with `asyncio.sleep(0.05)`.
+- On scroll, `_on_scroll()` calls `worker.add_priority_rows()` to reprioritize.
+- `_make_thumb_jpeg()` runs entirely in the worker thread (decoding HEIC via pillow-heif, scaling via Pillow). Emits small JPEG bytes. Main thread only calls `QImage.fromData()` + `QPixmap.fromImage()`.
+- Thumbnail JPEGs are cached as `_thumb_{stem}.jpg` in `%TEMP%/iphone_explorer/{udid8}/`. Revisiting a folder is near-instant.
+
+**Video thumbnails**
+- Videos emit cached `_thumb_{stem}.jpg` if it exists (generated on first preview).
+- On first single-click, video is downloaded and played via `QMediaPlayer`.
+- After download, `_try_update_thumb(row, local)` extracts a frame via OpenCV (`_try_video_frame`), saves the thumbnail JPEG to cache, and schedules `_apply_thumb(row, img)` on the main thread via `QTimer.singleShot(0, ...)`.
+
+**Navigation**
+- Single-click folder → `_load_right()`: loads right grid only, left panel unchanged. `_disconnect_list_worker()` called first.
+- Double-click folder → `_load_dir()`: full navigation, both panels reload.
+- Arrow-key folder nav connected via `currentItemChanged` signal.
+
+**Preview panel**
+- 320 px right-side panel, video-only. Photo single-click calls `_clear_preview()` which stops any playing video.
+- `QMediaPlayer` + `QVideoWidget` with play/pause, stop, seek slider, time display.
+- "Open in System App" button (`os.startfile` on Windows).
+
+### AppsPage
+
+- `_live_workers: set` tracks all running workers to prevent GC crash.
+- `_ListAppsWorker` wraps `asyncio.run(_list_apps(...))`.
+- `_AppActionWorker` runs install/uninstall coroutines.
+- Auto-loads app list on first device connect.
+
+### Thumbnail Cache Location
+
+```
+%TEMP%\iphone_explorer\{udid[:8]}\
+  {filename}.{ext}          ← full downloaded file
+  _thumb_{stem}.jpg         ← pre-scaled JPEG thumbnail (THUMB_SIZE=155px)
+```
+
+---
+
+## Terminal App (`main.py`)
 
 High-level flow:
 
-1. prepare terminal encoding and PATH
-2. verify core tools exist
-3. poll for a connected device
-4. fetch device info
-5. render dashboard and interactive menu
-6. dispatch to feature modules
+1. Prepare terminal encoding and PATH
+2. Verify core tools exist
+3. Poll for connected device
+4. Fetch device info
+5. Render dashboard and interactive menu
+6. Dispatch to feature modules
 
-## Important Modules
+### Important Modules
 
-### `src/device`
+#### `src/device`
+- `detector.py` — detects devices using `idevice_id`
+- `info.py` — builds `DeviceInfo` from `ideviceinfo` and `pymobiledevice3`
 
-- `detector.py`
-  Detects connected devices using `idevice_id`
-- `info.py`
-  Builds a `DeviceInfo` object from `ideviceinfo` and `pymobiledevice3`
+#### `src/utils`
+- `platform.py` — finds required tools, returns install instructions
+- `runner.py` — common subprocess wrapper
 
-### `src/utils`
+#### `src/ui`
+- `dashboard.py` — Rich dashboard
+- `menu.py` — interactive prompts and formatting helpers
+- `progress.py` — spinners, progress bars, live streaming output
 
-- `platform.py`
-  Finds required tools and returns install instructions
-- `runner.py`
-  Common subprocess wrapper for CLI tool execution
+#### `src/terminal/features`
+- `files.py` — AFC file browsing and transfers
+- `apps.py` — app listing, install, uninstall
+- `media.py` — photo/video export from DCIM; `_listdir` uses concurrent stat
+- `backup.py` — backup and restore
+- `diagnostics.py` — diagnostics, reboot, shutdown
+- `screenshot.py` — screenshot capture
+- `rename.py` — device rename
+- `mirror.py` — mirror window scaffold
 
-### `src/ui`
-
-- `dashboard.py`
-  Rich dashboard for connected device state
-- `menu.py`
-  Interactive prompts, menu rendering, shared formatting helpers
-- `progress.py`
-  Spinners, progress bars, and live streaming output helpers
-
-### `src/features`
-
-- `files.py`
-  AFC-based file browsing and transfers
-- `apps.py`
-  App listing, install, uninstall
-- `media.py`
-  Photo and video export from `DCIM`
-- `backup.py`
-  Backup and restore orchestration
-- `diagnostics.py`
-  Full diagnostics, reboot, shutdown
-- `screenshot.py`
-  Screenshot capture and developer-service error handling
-- `rename.py`
-  Rename the device
-- `mirror.py`
-  Dedicated mirror window scaffold with setup automation
+---
 
 ## Storage Behavior
 
-Storage values are taken from the `com.apple.disk_usage` domain.
+Storage values from `com.apple.disk_usage` domain.
+- Total capacity: decimal GB
+- Free space: `AmountDataAvailable`
+- Do not use `TotalDataAvailable` for user-visible free space
 
-Important detail:
+## Screenshot / Mirror Constraints
 
-- total device capacity is displayed using decimal GB
-- free space uses `AmountDataAvailable`
-- earlier misleading keys like `TotalDataAvailable` should not be used for user-visible free space
+- Developer services blocked without Developer Mode enabled and DDI mounted
+- Mirror: use `pymobiledevice3`, not `ideviceimagemounter.exe`
+- Mirror live frame stream backend still pending
 
-## Screenshot and Mirror Constraints
-
-Current limitation:
-
-- screenshot and mirror-related developer services are blocked unless Developer Mode is enabled and the Developer Disk Image is mounted
-
-Mirror setup direction:
-
-- use `pymobiledevice3` rather than the unstable Windows `ideviceimagemounter.exe` path
-- support auto-mount and remote tunnel setup from the app
-- later connect a real live frame stream into the mirror viewer
-
-## Mirror Window Status
-
-The current mirror window is not a full live mirroring implementation yet.
-
-What it already does:
-
-- opens as a separate application window
-- shows connected device metadata
-- checks developer mode state
-- checks screenshot/developer service readiness
-- automates DDI mount attempts
-- automates tunnel start/stop attempts
-- shows live setup logs
-
-What is still pending:
-
-- actual video/frame streaming backend
-- rendering the live iPhone display into the viewer area
+---
 
 ## Repo Organization
 
-Top-level source:
-
-- `main.py`
-- `requirements.txt`
-- `src/`
-
-Development artifacts:
-
-- `scripts/debug/`
+```
+iphone-experiments/
+  main.py              ← terminal entry point
+  desktop.py           ← GUI entry point
+  requirements.txt
+  src/
+    gui/
+      main_window.py
+      pages/
+      widgets/
+    device/
+    terminal/
+      features/
+    utils/
+  scripts/debug/
+```
 
 ## Branch Strategy
 
-`master` contains the complete codebase snapshot.
+`master` — full codebase  
+`feature-desktop-ui` — active GUI development
 
-Feature branches currently represent project areas and were created from the same baseline:
+Feature branches (terminal): `feature-files`, `feature-apps`, `feature-media`, `feature-backup`, `feature-diagnostics`, `feature-screenshot`, `feature-rename`, `feature-mirror`, `feature-device`, `feature-ui`, `feature-utils`
 
-- `feature-files`
-- `feature-apps`
-- `feature-media`
-- `feature-backup`
-- `feature-diagnostics`
-- `feature-screenshot`
-- `feature-rename`
-- `feature-mirror`
-- `feature-device`
-- `feature-ui`
-- `feature-utils`
+## Dependencies
 
-## Next Good Steps
+```
+PySide6>=6.6.0          # GUI framework
+pillow-heif>=0.15.0     # HEIC thumbnail decoding
+opencv-python-headless>=4.8.0  # video frame extraction
+pymobiledevice3>=4.0.0  # AFC, device services
+rich>=13.7.0            # terminal UI
+textual>=0.61.0
+click>=8.1.7
+```
 
-- connect the mirror window to a real live stream backend
-- improve developer-mode detection and setup messaging
-- reduce encoding artifacts in some terminal strings
-- add tests for storage parsing and runner behavior
-- optionally split feature branches into feature-specific change history instead of baseline copies
+## Next Steps (GUI)
+
+- Files page — AFC file browser with upload/download/delete
+- Backup & Restore page — streaming output, progress bar
+- Screen Mirror page — port tkinter scaffold to PySide6 + live stream
+- Improve video thumbnail generation (extract without downloading full file)
+- Suppress OpenCV ffmpeg stderr noise
