@@ -1,6 +1,9 @@
 """
 Parse device information from ideviceinfo output.
 """
+from __future__ import annotations
+
+import base64
 from dataclasses import dataclass, field
 from ..utils.runner import run
 
@@ -48,29 +51,64 @@ MODEL_NAMES: dict[str, str] = {
 
 @dataclass
 class DeviceInfo:
+    # ── Core identity ──────────────────────────────────────────────────────
     udid: str = ""
     name: str = "Unknown"
-    model: str = "Unknown"
-    product_type: str = ""
+    model: str = "Unknown"           # friendly name, e.g. "iPhone 12 Pro"
+    product_type: str = ""           # e.g. "iPhone13,3"
     ios_version: str = "Unknown"
     build_version: str = ""
     serial: str = "Unknown"
     color: str = ""
-    total_storage_bytes: int = 0
-    free_storage_bytes: int = 0
-    battery_level: int = 0
-    battery_charging: bool = False
+
+    # ── Extended identity ──────────────────────────────────────────────────
+    model_number: str = ""           # e.g. "MGMN3" (SKU / part number)
+    hardware_model: str = ""         # e.g. "D53pAP" (internal board name)
+    hardware_platform: str = ""      # e.g. "t8101"
+    imei: str = ""
+    imei2: str = ""
+    meid: str = ""
+    iccid: str = ""                  # SIM card ID
+    phone_number: str = ""
+    region_info: str = ""            # e.g. "LL/A"
+
+    # ── Hardware ───────────────────────────────────────────────────────────
     cpu_architecture: str = ""
+    board_id: str = ""               # e.g. "14"
+    chip_id: str = ""                # e.g. "0x8101"
+    die_id: str = ""
+    baseband_version: str = ""
+    firmware_version: str = ""
+    mlb_serial: str = ""             # motherboard serial
+
+    # ── Connectivity ───────────────────────────────────────────────────────
     wifi_address: str = ""
     bluetooth_address: str = ""
+    ethernet_address: str = ""
+
+    # ── Storage ───────────────────────────────────────────────────────────
+    total_storage_bytes: int = 0
+    free_storage_bytes: int = 0
+
+    # ── Battery ───────────────────────────────────────────────────────────
+    battery_level: int = 0
+    battery_charging: bool = False
+    battery_external_connected: bool = False
+    battery_fully_charged: bool = False
+
+    # ── Status ────────────────────────────────────────────────────────────
     device_class: str = ""
     activation_state: str = ""
+    password_protected: bool = False
+    find_my_locked: bool = False     # decoded from NonVolatileRAM fm-activation-locked
+    developer_mode: bool = False     # com.apple.security.mac.amfi
     paired: bool = True
     raw: dict = field(default_factory=dict)
 
+    # ── Computed properties ────────────────────────────────────────────────
+
     @property
     def total_storage_gb(self) -> float:
-        # Apple presents device capacity in decimal GB, not binary GiB.
         return round(self.total_storage_bytes / (1000 ** 3), 1)
 
     @property
@@ -87,14 +125,57 @@ class DeviceInfo:
             return 0
         return int((self.total_storage_bytes - self.free_storage_bytes) / self.total_storage_bytes * 100)
 
+    @property
+    def icloud_locked(self) -> bool:
+        """True if iCloud Activation Lock is active (device not yours or erased)."""
+        # If activation state is not "Activated", the device is iCloud locked
+        return self.activation_state not in ("Activated", "")
+
+    @property
+    def chip_id_hex(self) -> str:
+        """Chip ID as hex string for display, e.g. '0x8101'."""
+        try:
+            return f"0x{int(self.chip_id):04X}" if self.chip_id else ""
+        except (ValueError, TypeError):
+            return self.chip_id
+
+
+# ── Parsing helpers ────────────────────────────────────────────────────────────
 
 def _parse_ideviceinfo_output(text: str) -> dict[str, str]:
-    result = {}
+    result: dict[str, str] = {}
     for line in text.splitlines():
-        if ":" in line:
+        if ":" in line and not line.startswith(" "):
             key, _, value = line.partition(":")
             result[key.strip()] = value.strip()
     return result
+
+
+def _parse_nvram(raw: dict[str, str]) -> dict[str, str]:
+    """Extract key=value pairs from the NonVolatileRAM multiline block."""
+    nvram: dict[str, str] = {}
+    in_nvram = False
+    for line in raw.get("__raw_text__", "").splitlines():
+        if line.startswith("NonVolatileRAM:"):
+            in_nvram = True
+            continue
+        if in_nvram:
+            if line.startswith(" "):
+                stripped = line.strip()
+                if ":" in stripped:
+                    k, _, v = stripped.partition(":")
+                    nvram[k.strip()] = v.strip()
+            else:
+                in_nvram = False
+    return nvram
+
+
+def _decode_b64_bool(value: str) -> bool:
+    """Decode a base64-encoded string and return True if it decodes to 'YES'."""
+    try:
+        return base64.b64decode(value).decode("utf-8", errors="ignore").upper().strip() == "YES"
+    except Exception:
+        return False
 
 
 def _get_storage_via_pymobiledevice(udid: str) -> tuple[int, int]:
@@ -103,12 +184,11 @@ def _get_storage_via_pymobiledevice(udid: str) -> tuple[int, int]:
         import asyncio
         from pymobiledevice3.lockdown import create_using_usbmux
 
-        async def _fetch():
+        async def _fetch() -> tuple[int, int]:
             lockdown = await create_using_usbmux(serial=udid)
             disk = await lockdown.get_value("com.apple.disk_usage")
             total = int(disk.get("TotalDiskCapacity", 0))
-            # AmountDataAvailable matches the free space reported on-device.
-            free = int(disk.get("AmountDataAvailable", 0))
+            free  = int(disk.get("AmountDataAvailable", 0))
             return total, free
 
         return asyncio.run(_fetch())
@@ -116,32 +196,74 @@ def _get_storage_via_pymobiledevice(udid: str) -> tuple[int, int]:
         return 0, 0
 
 
+def _get_developer_mode(udid: str) -> bool:
+    """Query developer mode status via pymobiledevice3."""
+    try:
+        import asyncio
+        from pymobiledevice3.lockdown import create_using_usbmux
+
+        async def _fetch() -> bool:
+            lockdown = await create_using_usbmux(serial=udid)
+            val = await lockdown.get_value("com.apple.security.mac.amfi",
+                                           "DeveloperModeStatus")
+            return bool(val)
+
+        return asyncio.run(_fetch())
+    except Exception:
+        return False
+
+
+# ── Public API ─────────────────────────────────────────────────────────────────
+
 def get_device_info(udid: str) -> "DeviceInfo | None":
     result = run("ideviceinfo", udid=udid)
     if not result.success:
         return None
 
-    raw = _parse_ideviceinfo_output(result.stdout)
+    # Keep raw text for NVRAM block parsing
+    raw_text = result.stdout
+    raw = _parse_ideviceinfo_output(raw_text)
+    raw["__raw_text__"] = raw_text
 
-    # Battery info
+    # Battery domain
     bat_result = run("ideviceinfo", "-q", "com.apple.mobile.battery", udid=udid)
-    bat_raw = _parse_ideviceinfo_output(bat_result.stdout) if bat_result.success else {}
+    bat = _parse_ideviceinfo_output(bat_result.stdout) if bat_result.success else {}
 
-    # Storage via pymobiledevice3 (handles nested plist correctly)
+    # Storage via pymobiledevice3
     total, free = _get_storage_via_pymobiledevice(udid)
 
+    # Developer mode
+    dev_mode = _get_developer_mode(udid)
+
+    # NVRAM block (Find My lock)
+    nvram = _parse_nvram(raw)
+    find_my_locked = _decode_b64_bool(nvram.get("fm-activation-locked", ""))
+
+    # Battery fields
     try:
-        battery = int(bat_raw.get("BatteryCurrentCapacity", raw.get("BatteryCurrentCapacity", 0)))
+        battery = int(bat.get("BatteryCurrentCapacity", raw.get("BatteryCurrentCapacity", 0)))
     except ValueError:
         battery = 0
 
-    charging_val = bat_raw.get("BatteryIsCharging", raw.get("BatteryIsCharging", "false"))
-    charging = charging_val.lower() in ("true", "1", "yes")
+    def _bool(d: dict, key: str) -> bool:
+        return d.get(key, "false").lower() in ("true", "1", "yes")
 
-    product_type = raw.get("ProductType", "")
+    charging          = _bool(bat, "BatteryIsCharging")
+    ext_connected     = _bool(bat, "ExternalConnected")
+    fully_charged     = _bool(bat, "FullyCharged")
+    password_prot     = _bool(raw, "PasswordProtected")
+
+    # Chip ID as decimal string (convert to hex later in property)
+    chip_id_raw = raw.get("ChipID", "")
+
+    product_type  = raw.get("ProductType", "")
     friendly_model = MODEL_NAMES.get(product_type, product_type or raw.get("HardwareModel", "Unknown"))
 
+    # MEID: prefer top-level key, fallback to CarrierBundleInfoArray parsing
+    meid = raw.get("MobileEquipmentIdentifier", "")
+
     return DeviceInfo(
+        # Core
         udid=udid,
         name=raw.get("DeviceName", "Unknown"),
         model=friendly_model,
@@ -150,15 +272,42 @@ def get_device_info(udid: str) -> "DeviceInfo | None":
         build_version=raw.get("BuildVersion", ""),
         serial=raw.get("SerialNumber", "Unknown"),
         color=raw.get("DeviceColor", ""),
-        total_storage_bytes=total,
-        free_storage_bytes=free,
-        battery_level=battery,
-        battery_charging=charging,
+        # Extended identity
+        model_number=raw.get("ModelNumber", ""),
+        hardware_model=raw.get("HardwareModel", ""),
+        hardware_platform=raw.get("HardwarePlatform", ""),
+        imei=raw.get("InternationalMobileEquipmentIdentity", ""),
+        imei2=raw.get("InternationalMobileEquipmentIdentity2", ""),
+        meid=meid,
+        iccid=raw.get("IntegratedCircuitCardIdentity", ""),
+        phone_number=raw.get("PhoneNumber", ""),
+        region_info=raw.get("RegionInfo", ""),
+        # Hardware
         cpu_architecture=raw.get("CPUArchitecture", ""),
+        board_id=raw.get("BoardId", ""),
+        chip_id=chip_id_raw,
+        die_id=raw.get("DieID", ""),
+        baseband_version=raw.get("BasebandVersion", ""),
+        firmware_version=raw.get("FirmwareVersion", ""),
+        mlb_serial=raw.get("MLBSerialNumber", ""),
+        # Connectivity
         wifi_address=raw.get("WiFiAddress", ""),
         bluetooth_address=raw.get("BluetoothAddress", ""),
+        ethernet_address=raw.get("EthernetAddress", ""),
+        # Storage
+        total_storage_bytes=total,
+        free_storage_bytes=free,
+        # Battery
+        battery_level=battery,
+        battery_charging=charging,
+        battery_external_connected=ext_connected,
+        battery_fully_charged=fully_charged,
+        # Status
         device_class=raw.get("DeviceClass", "iPhone"),
         activation_state=raw.get("ActivationState", ""),
+        password_protected=password_prot,
+        find_my_locked=find_my_locked,
+        developer_mode=dev_mode,
         paired=True,
         raw=raw,
     )

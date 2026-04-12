@@ -257,13 +257,12 @@ class MainWindow(QMainWindow):
                 self._on_disconnected()
         else:
             udid = udids[0]
-            if (
-                self._current_info is None
-                or self._current_info.udid != udid
-                or self._poll_count % 6 == 0
-            ):
-                # New device or periodic refresh
+            if self._current_info is None or self._current_info.udid != udid:
+                # Genuinely new connection — full reset of all pages
                 self._on_connecting(udid)
+            elif self._poll_count % 6 == 0:
+                # Same device still connected — silently refresh header/dashboard only
+                self._on_refresh_info(udid)
 
     def _on_connecting(self, udid: str) -> None:
         self._log_msg(f"Device detected ({udid[:8]}…)  Reading info…")
@@ -277,6 +276,22 @@ class MainWindow(QMainWindow):
         self._worker = _DeviceInfoWorker(udid, self._service)
         self._worker.finished.connect(self._on_info_received)
         self._worker.start()
+
+    def _on_refresh_info(self, udid: str) -> None:
+        """Periodic silent refresh — updates header/dashboard without disturbing other pages."""
+        self._worker = _DeviceInfoWorker(udid, self._service)
+        self._worker.finished.connect(self._on_refresh_info_received)
+        self._worker.start()
+
+    def _on_refresh_info_received(self, result: ServiceResult) -> None:
+        if result.success:
+            info: DeviceInfo = result.data
+            previous = self._current_info
+            self._current_info = info
+            self._header.show_device(info)
+            self._dash_page.show_device(info)
+            self._update_tray_tooltip(info)
+            self._notify_device_state(previous, info)
 
     def _on_info_received(self, result: ServiceResult) -> None:
         if result.success:

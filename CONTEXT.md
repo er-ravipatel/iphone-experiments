@@ -5,32 +5,31 @@
 - Current working repo path: `C:\Workspace\Personal\iphone-experiments`
 - Current active branch: `feature-desktop-ui`
 - This repo is the source of truth for ongoing work.
-- The earlier mistaken copy under `C:\Workspace\Personal\iphone-storage-explorer\iphone-experiments` is no longer in use and has been removed.
 
 ## Agent Handoff Summary
 
-- Default branch for continued work: `feature-desktop-ui`
-- Current repo state: clean working tree at the moment this context was refreshed
-- Recently completed:
-  - desktop icon system in `src/gui/icon.py`
-  - system tray manager in `src/gui/tray.py`
-  - app/tray/taskbar icon wiring in `desktop.py`, `src/gui/app.py`, and `src/gui/main_window.py`
-  - permanent icon assets in `assets/app-icon.svg`, `assets/app-icon.png`, `assets/app-icon.ico`
-  - tray notifications for device connected, disconnected, low battery, and low storage
-- Important known issue:
-  - desktop media video thumbnails are still not fully fixed and should be treated as open work
-- Remaining major GUI milestones:
-  - Files page
-  - Backup & Restore page
-  - Screen Mirror page migration from scaffold to PySide6
-  - Settings page
-  - packaging desktop app as a standalone Windows executable for best taskbar identity
+**Last session completed (2026-04-12):**
+- Extended `DeviceInfo` with 15+ new fields (IMEI, IMEI2, MEID, ICCID, phone number, board ID, chip ID, baseband, firmware, MLB serial, Find My lock, passcode status, developer mode, battery external/full states)
+- Full redesign of `DiagnosticsPage` — 3uTools-style layout with categorised info tables + coloured status cards
+- Live screenshot panel in Diagnostics (auto-refreshes every 4 s; gracefully degrades to "Requires Developer Mode" message when not available — `com.apple.mobile.screenshotr` is a developer service on iOS 16+)
+- `MediaPage` preview pane overhaul: resizable via QSplitter, pop-out floating window, full-resolution photo preview (downloads full file, falls back to thumbnail as placeholder), EXIF metadata display
+- Fixed periodic device poll resetting the media page: new `_on_refresh_info()` path updates only the header/dashboard every 15 s without touching media page state
+- `_PhotoPopout` floating window with Fit/Full-Size toggle and scroll panning
+- `_PhotoDecodeWorker` QThread for HEIC decode on background thread (safe QPixmap on main thread)
+
+**Previous sessions:**
+- Viewport-aware lazy thumbnail loading (visible items first, `_get_visible_rows()`)
+- Video preview with in-app `QMediaPlayer` playback
+- `abort_all()` interface on every page, called by `MainWindow._navigate()`
+- QThread crash fixes: `_live_workers: set`, signal disconnect before replacement, no blocking `wait()` on main thread
+- Concurrent AFC stat calls in `_listdir` (semaphore of 8, ~8x speedup)
+
+---
 
 ## Goal
 
-This repository explores a terminal-first iPhone management tool for Windows and other desktop platforms. The main direction is to keep the terminal app as the control center while using separate windows only when a richer visual surface is required, such as screen mirroring.
-
-A full **PySide6 desktop GUI** (`desktop.py`) has been built in parallel and is the primary active development surface.
+PySide6 desktop GUI (`desktop.py`) is the primary active development surface.
+Terminal CLI (`main.py`) is feature-complete.
 
 ---
 
@@ -41,139 +40,132 @@ Entry point: `desktop.py` → `src/gui/main_window.py`
 ### Architecture
 
 - `MainWindow` hosts a sidebar nav, `QStackedWidget` for pages, and an activity log.
-- Device polling runs on a `QTimer` (2.5 s interval, main thread, cheap `idevice_id` call).
-- Device info fetching runs on a `_DeviceInfoWorker(QThread)`.
-- **Every page exposes `abort_all()`** — called by `MainWindow._navigate()` before switching pages so running workers are cancelled and the outgoing page is cleanly stopped.
-- Desktop app branding now uses generated icon assets stored in `assets/`.
-- System tray support is wired through `src/gui/tray.py` and used by `MainWindow`.
+- Device polling: `QTimer` every 2.5 s (cheap `idevice_id` call on main thread).
+  - **New device / first connect** → `_on_connecting()` — full reset of all pages.
+  - **Same device, periodic tick (every 15 s)** → `_on_refresh_info()` — silently refreshes header + dashboard only. Media and Apps pages are NOT reset.
+- Device info fetching: `_DeviceInfoWorker(QThread)`.
+- **Every page exposes `abort_all()`** — called by `MainWindow._navigate()` before switching.
 
 ### Pages
 
-| Page | Index | File |
+| Page | Index | File | Notes |
+|---|---|---|---|
+| Dashboard | 0 | `src/gui/pages/dashboard_page.py` | Battery/storage bars, connectivity cards |
+| Diagnostics | 1 | `src/gui/pages/diagnostics_page.py` | 3uTools-style — see below |
+| Screenshot | 2 | `src/gui/pages/screenshot_page.py` | Capture + preview |
+| Apps | 3 | `src/gui/pages/apps_page.py` | List/install/uninstall |
+| Photos & Videos | 4 | `src/gui/pages/media_page.py` | Full media browser — see below |
+
+### Threading Rules (critical — crashes if violated)
+
+1. **`QPixmap` only on main thread.** Workers emit `bytes` or `QImage`; slot calls `QPixmap.fromImage()`.
+2. **`_live_workers: set` on every page** with QThread workers. Add on `.start()`, remove on `finished`. Prevents Python GC destroying a running QThread.
+3. **Signal disconnect before worker replacement.** Call `_disconnect_list_worker()` before assigning a new `_ListDirWorker`.
+4. **No blocking `wait()` on main thread.** Call `worker.cancel()` + disconnect signals; thread finishes naturally, kept alive by `_live_workers`.
+5. **`QTimer.singleShot(0, fn)` from `threading.Thread` is unreliable.** Use a proper `QThread` with a `Signal` instead. (Lesson learned in photo preview work.)
+
+---
+
+## DiagnosticsPage — 3uTools-style layout
+
+**File:** `src/gui/pages/diagnostics_page.py`
+
+### Layout
+- **Left column** (scrollable): 4 categorised `QTableWidget`s
+  - `_tbl_identity` — Device Identity (name, model, product type, model number, hardware model, iOS, build, serial, UDID, IMEI, IMEI2, MEID, ICCID, phone number, region, color)
+  - `_tbl_hardware` — Hardware (CPU arch, platform, board ID, chip ID as hex, die ID, baseband version, firmware, MLB serial)
+  - `_tbl_connectivity` — Connectivity (WiFi, Bluetooth, Ethernet MAC)
+  - `_tbl_battery` — Battery & Storage (level, charge status, plugged in, total/used/free)
+- **Right column**: 5 `_StatusCard` widgets with green ✓ / red ✗ / grey ? dot indicators
+  - Activation State, iCloud Lock, Find My, Passcode, Developer Mode
+- **Right column bottom**: Live screenshot panel (`_ScreenshotWorker`)
+  - Auto-starts when page is shown, stops when hidden (via `showEvent`/`hideEvent`)
+  - Stops retrying on `InvalidServiceError` — shows "Requires Developer Mode" message
+  - Refreshes every 4 s when developer mode is enabled
+
+### DeviceInfo — new fields (all from `ideviceinfo` default domain, no developer mode needed)
+
+| Field | Source key | Notes |
 |---|---|---|
-| Dashboard | 0 | `src/gui/pages/dashboard_page.py` |
-| Diagnostics | 1 | `src/gui/pages/diagnostics_page.py` |
-| Screenshot | 2 | `src/gui/pages/screenshot_page.py` |
-| Apps | 3 | `src/gui/pages/apps_page.py` |
-| Photos & Videos | 4 | `src/gui/pages/media_page.py` |
+| `imei` | `InternationalMobileEquipmentIdentity` | |
+| `imei2` | `InternationalMobileEquipmentIdentity2` | dual-SIM |
+| `meid` | `MobileEquipmentIdentifier` | |
+| `iccid` | `IntegratedCircuitCardIdentity` | SIM card |
+| `phone_number` | `PhoneNumber` | |
+| `model_number` | `ModelNumber` | SKU, e.g. "MGMN3" |
+| `hardware_model` | `HardwareModel` | e.g. "D53pAP" |
+| `hardware_platform` | `HardwarePlatform` | e.g. "t8101" |
+| `board_id` | `BoardId` | |
+| `chip_id` | `ChipID` | shown as hex via `chip_id_hex` property |
+| `die_id` | `DieID` | |
+| `baseband_version` | `BasebandVersion` | |
+| `firmware_version` | `FirmwareVersion` | |
+| `mlb_serial` | `MLBSerialNumber` | motherboard serial |
+| `ethernet_address` | `EthernetAddress` | |
+| `find_my_locked` | `NonVolatileRAM.fm-activation-locked` | base64-decoded "YES"/"NO" |
+| `password_protected` | `PasswordProtected` | |
+| `battery_external_connected` | `ExternalConnected` (battery domain) | |
+| `battery_fully_charged` | `FullyCharged` (battery domain) | |
+| `developer_mode` | `com.apple.security.mac.amfi → DeveloperModeStatus` | via pymobiledevice3 |
 
-### Desktop Branding / Notifications
-
-- App icon source: `assets/app-icon.svg`
-- Generated Windows assets: `assets/app-icon.png`, `assets/app-icon.ico`
-- Icon generator: `src/gui/icon.py`
-- Tray manager: `src/gui/tray.py`
-- `desktop.py` sets a Windows AppUserModelID for better taskbar grouping
-- `MainWindow` shows tray notifications for device connected, device disconnected, low battery, and low storage
-
-### Threading Rules (critical)
-
-All pages follow these rules to prevent crashes:
-
-1. **`QPixmap` must only be created on the main thread.** Workers pass raw bytes or `QImage` via signals; `QPixmap.fromImage()` is called in the slot.
-2. **`_live_workers: set` keeps Python references** to all running QThread workers. Without this, Python GC can destroy a QThread while its OS thread is running → `QThread: Destroyed while thread is still running` crash.
-3. **Signal disconnect before worker replacement.** When starting a new `_ListDirWorker`, `_disconnect_list_worker()` is called first to prevent the old worker's stale `finished` signal from calling `_populate()` on top of fresh data.
-4. **No blocking `wait()` on main thread.** `_cancel_thumb_worker()` disconnects the signal immediately and sets `self._thumb_worker = None` — the thread runs to completion in the background, kept alive by `_live_workers`.
-5. **asyncio workers** (`_ThumbnailWorker`, `_ExportWorker`, etc.) use a `_stop` flag checked between loop iterations. Single-shot async calls (`_ListDirWorker`, `_ScanWorker`) discard results via signal disconnect or flag check.
-
-### MediaPage — Photos & Videos
-
-Key design decisions:
-
-**Directory listing (`_listdir` in `src/terminal/features/media.py`)**
-- `afc.listdir()` returns all names in one call.
-- `afc.stat()` is called concurrently (semaphore of 8) for all entries. Sequential stat was the biggest bottleneck: 300 files × ~15 ms = ~4.5 s. Concurrent stat brings it to ~0.5 s.
-
-**Thumbnail loading (`_ThumbnailWorker`)**
-- Grid items are populated with placeholder icons first (`setUpdatesEnabled(False/True)` suppresses per-item repaints for large folders).
-- `QTimer.singleShot(150, ...)` defers worker start so the grid layout has rendered and `_get_visible_rows()` returns accurate viewport data.
-- Visible rows are loaded first (priority set), background rows at ~20/sec with `asyncio.sleep(0.05)`.
-- On scroll, `_on_scroll()` calls `worker.add_priority_rows()` to reprioritize.
-- `_make_thumb_jpeg()` runs entirely in the worker thread (decoding HEIC via pillow-heif, scaling via Pillow). Emits small JPEG bytes. Main thread only calls `QImage.fromData()` + `QPixmap.fromImage()`.
-- Thumbnail JPEGs are cached as `_thumb_{stem}.jpg` in `%TEMP%/iphone_explorer/{udid8}/`. Revisiting a folder is near-instant.
-
-**Video thumbnails**
-- Videos emit cached `_thumb_{stem}.jpg` if it exists (generated on first preview).
-- On first single-click, video is downloaded and played via `QMediaPlayer`.
-- After download, `_try_update_thumb(row, local)` extracts a frame via OpenCV (`_try_video_frame`), saves the thumbnail JPEG to cache, and schedules `_apply_thumb(row, img)` on the main thread via `QTimer.singleShot(0, ...)`.
-
-**Navigation**
-- Single-click folder → `_load_right()`: loads right grid only, left panel unchanged. `_disconnect_list_worker()` called first.
-- Double-click folder → `_load_dir()`: full navigation, both panels reload.
-- Arrow-key folder nav connected via `currentItemChanged` signal.
-
-**Preview panel**
-- 320 px right-side panel, video-only. Photo single-click calls `_clear_preview()` which stops any playing video.
-- `QMediaPlayer` + `QVideoWidget` with play/pause, stop, seek slider, time display.
-- "Open in System App" button (`os.startfile` on Windows).
-
-### AppsPage
-
-- `_live_workers: set` tracks all running workers to prevent GC crash.
-- `_ListAppsWorker` wraps `asyncio.run(_list_apps(...))`.
-- `_AppActionWorker` runs install/uninstall coroutines.
-- Auto-loads app list on first device connect.
-
-### Thumbnail Cache Location
-
-```
-%TEMP%\iphone_explorer\{udid[:8]}\
-  {filename}.{ext}          ← full downloaded file
-  _thumb_{stem}.jpg         ← pre-scaled JPEG thumbnail (THUMB_SIZE=155px)
-```
+**Screenshot service constraint:** `com.apple.mobile.screenshotr` is a developer service on iOS 16+. Both `idevicescreenshot` (libimobiledevice) and pymobiledevice3 confirm `InvalidService` without developer mode. No workaround exists at the Apple protocol level.
 
 ---
 
-## Terminal App (`main.py`)
+## MediaPage — Photos & Videos
 
-High-level flow:
+**File:** `src/gui/pages/media_page.py`
 
-1. Prepare terminal encoding and PATH
-2. Verify core tools exist
-3. Poll for connected device
-4. Fetch device info
-5. Render dashboard and interactive menu
-6. Dispatch to feature modules
+### Preview pane (updated)
 
-### Important Modules
+- Hidden by default, shown when any file is selected.
+- **Resizable**: implemented as `QSplitter` between grid and preview panel (`self._inner_splitter`). Panel width is remembered in `self._preview_panel_width` and restored on next open.
+- **Pop-out button**: "⤢ Pop Out" button opens `_PhotoPopout(QWidget, Qt.Window)` — floating window with Fit/Full-Size toggle and scroll area for panning.
+- **Photo preview** (stack index 2):
+  - Shows full-resolution photo, not thumbnail.
+  - JPEG/PNG: loaded directly with `QImage(path)` on main thread (fast, Qt-native).
+  - HEIC: decoded by `_PhotoDecodeWorker(QThread)` via Pillow + pillow-heif, emits `QPixmap` via signal.
+  - If full file not cached: shows thumbnail as placeholder, downloads file in background via `_DownloadOpenWorker`, then replaces with full-res on completion.
+  - EXIF metadata (dimensions, date taken) read in `threading.Thread`, updates label via `QTimer.singleShot(0, lambda html=...: label.setText(html))`.
+- **Video preview** (stack index 1): unchanged — `QMediaPlayer` + `QVideoWidget`, auto-play on click.
+- `_clear_preview()` hides panel and stops any playing video.
+- `_show_preview_panel()` / `_hide_preview_panel()` manage splitter sizes.
+- Video pop-out: opens file in system player via `_open_system()` (moving `QMediaPlayer` between windows is not supported in Qt).
 
-#### `src/device`
-- `detector.py` — detects devices using `idevice_id`
-- `info.py` — builds `DeviceInfo` from `ideviceinfo` and `pymobiledevice3`
-
-#### `src/utils`
-- `platform.py` — finds required tools, returns install instructions
-- `runner.py` — common subprocess wrapper
-
-#### `src/ui`
-- `dashboard.py` — Rich dashboard
-- `menu.py` — interactive prompts and formatting helpers
-- `progress.py` — spinners, progress bars, live streaming output
-
-#### `src/terminal/features`
-- `files.py` — AFC file browsing and transfers
-- `apps.py` — app listing, install, uninstall
-- `media.py` — photo/video export from DCIM; `_listdir` uses concurrent stat
-- `backup.py` — backup and restore
-- `diagnostics.py` — diagnostics, reboot, shutdown
-- `screenshot.py` — screenshot capture
-- `rename.py` — device rename
-- `mirror.py` — mirror window scaffold
+### Toolbar buttons
+Removed `setFixedWidth` from Export buttons — replaced with `setMinimumWidth`. This allows the splitter handle to move left freely (fixed widths were forcing a minimum width on the grid panel that blocked leftward drag).
 
 ---
 
-## Storage Behavior
+## DeviceInfo (`src/device/info.py`)
 
-Storage values from `com.apple.disk_usage` domain.
-- Total capacity: decimal GB
-- Free space: `AmountDataAvailable`
-- Do not use `TotalDataAvailable` for user-visible free space
+- `find_my_locked`: parsed from `NonVolatileRAM` multiline block in `ideviceinfo` output. The block contains `fm-activation-locked: <base64>` where base64 decodes to "YES" or "NO".
+- `chip_id_hex`: computed property — converts decimal chip ID string to `0xXXXX` hex format.
+- `icloud_locked`: computed property — True if `activation_state` is not "Activated".
+- NVRAM parsing: `_parse_nvram()` walks raw text looking for indented lines after `NonVolatileRAM:` header.
+
+---
 
 ## Screenshot / Mirror Constraints
 
-- Developer services blocked without Developer Mode enabled and DDI mounted
-- Mirror: use `pymobiledevice3`, not `ideviceimagemounter.exe`
-- Mirror live frame stream backend still pending
+- `com.apple.mobile.screenshotr` requires Developer Mode on iOS 16+. Confirmed by both `idevicescreenshot` and pymobiledevice3.
+- Mirror: use `pymobiledevice3`, not `ideviceimagemounter.exe`. Live frame stream backend still pending.
+- Developer Mode: Settings → Privacy & Security → Developer Mode → toggle On → restart device.
+
+---
+
+## Pending Milestones (GUI)
+
+| Milestone | Page | Notes |
+|---|---|---|
+| 5 | Files | AFC file browser — upload / download / delete / rename |
+| 6 | Backup & Restore | streaming output, progress bar, restore confirmation |
+| 7 | Screen Mirror | port tkinter scaffold to PySide6 + live stream (needs dev mode) |
+
+**Other open items:**
+- Video thumbnail improvement: extract frame without downloading full file (partial download or on-device frame extraction)
+- Suppress OpenCV ffmpeg stderr noise when extracting video frames
+- Package desktop app as standalone Windows `.exe`
 
 ---
 
@@ -184,41 +176,45 @@ iphone-experiments/
   main.py              ← terminal entry point
   desktop.py           ← GUI entry point
   requirements.txt
+  assets/              ← app icons (svg/png/ico)
   src/
     gui/
+      app.py           ← QApplication factory + dark stylesheet
+      icon.py          ← icon generator
+      tray.py          ← system tray manager
       main_window.py
       pages/
+        dashboard_page.py
+        diagnostics_page.py   ← 3uTools-style, updated this session
+        screenshot_page.py
+        apps_page.py
+        media_page.py         ← full media browser, updated this session
       widgets/
+        device_header.py
     device/
+      detector.py      ← idevice_id wrapper
+      info.py          ← DeviceInfo dataclass + fetcher, extended this session
     terminal/
-      features/
+      features/        ← shared feature modules (media, apps, backup, etc.)
     utils/
+      platform.py
+      runner.py
   scripts/debug/
 ```
 
 ## Branch Strategy
 
 `master` — full codebase  
-`feature-desktop-ui` — active GUI development
-
-Feature branches (terminal): `feature-files`, `feature-apps`, `feature-media`, `feature-backup`, `feature-diagnostics`, `feature-screenshot`, `feature-rename`, `feature-mirror`, `feature-device`, `feature-ui`, `feature-utils`
+`feature-desktop-ui` — active GUI development (current)
 
 ## Dependencies
 
 ```
-PySide6>=6.6.0          # GUI framework
-pillow-heif>=0.15.0     # HEIC thumbnail decoding
-opencv-python-headless>=4.8.0  # video frame extraction
-pymobiledevice3>=4.0.0  # AFC, device services
-rich>=13.7.0            # terminal UI
+PySide6>=6.6.0
+pillow-heif>=0.15.0
+opencv-python-headless>=4.8.0
+pymobiledevice3>=4.0.0
+rich>=13.7.0
 textual>=0.61.0
 click>=8.1.7
 ```
-
-## Next Steps (GUI)
-
-- Files page — AFC file browser with upload/download/delete
-- Backup & Restore page — streaming output, progress bar
-- Screen Mirror page — port tkinter scaffold to PySide6 + live stream
-- Improve video thumbnail generation (extract without downloading full file)
-- Suppress OpenCV ffmpeg stderr noise

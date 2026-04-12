@@ -13,19 +13,19 @@ Cross-platform iPhone management tool with both a terminal CLI and a full PySide
 
 - Source of truth: this repo and this workspace path
 - Branch to continue on by default: `feature-desktop-ui`
-- Latest completed work:
-  - desktop app branding/icon system added
-  - permanent icon assets added under `assets/`
-  - system tray integration added
-  - tray notifications added for connect, disconnect, low battery, and low storage
-  - workspace/context docs updated to reflect the correct repo path
+- Latest completed work (2026-04-12):
+  - **DiagnosticsPage** fully redesigned — 3uTools-style layout with 4 categorised info tables (Identity, Hardware, Connectivity, Battery) + 5 status cards (Activation, iCloud Lock, Find My, Passcode, Developer Mode) + live screenshot panel
+  - **DeviceInfo** extended with 15+ new fields: IMEI, IMEI2, MEID, ICCID, phone number, model number, hardware model, board ID, chip ID (hex), die ID, baseband, firmware, MLB serial, Find My lock (from NVRAM), passcode status, developer mode, battery external/full states
+  - **MediaPage** preview pane overhauled: resizable via QSplitter, pop-out floating window (`_PhotoPopout`), full-resolution photo preview (HEIC decoded via `_PhotoDecodeWorker` on background thread), EXIF metadata display
+  - Device polling split into two paths: new-device → full reset; same-device periodic → header/dashboard only (media/apps pages no longer reset every 15 s)
+  - Screenshot service gracefully degrades to "Requires Developer Mode" message on iOS 16+ (no loop / stderr flooding)
+  - Previous sessions: desktop branding/icon, system tray with notifications, lazy thumbnail loading, video preview with in-app player, `abort_all()` on every page, QThread crash fixes, concurrent AFC stat calls (~8x speedup)
 - Highest-priority known gap:
-  - video thumbnails in the desktop media page still need a proper fix
+  - video thumbnails still require downloading the full file (no partial/frame extraction yet)
 - Major desktop pages still pending:
-  - Files
-  - Backup & Restore
-  - Screen Mirror
-  - Settings
+  - Milestone 5: Files (AFC browser — upload/download/delete/rename)
+  - Milestone 6: Backup & Restore (streaming output, progress bar)
+  - Milestone 7: Screen Mirror (PySide6 port + live frame stream, needs Developer Mode)
 
 ## Entry Points
 
@@ -41,12 +41,21 @@ Cross-platform iPhone management tool with both a terminal CLI and a full PySide
 - Battery and storage status notifications for the connected device
 - Live device detection and auto-connect (polls every 2.5 s)
 - Dashboard — battery, storage, connectivity cards
-- Diagnostics — full device info table
+- Diagnostics — 3uTools-style layout:
+  - Device Identity table (name, model, iOS, build, serial, UDID, IMEI/IMEI2/MEID, ICCID, phone number, region, color)
+  - Hardware table (CPU arch, platform, board ID, chip ID hex, die ID, baseband, firmware, MLB serial)
+  - Connectivity table (WiFi, Bluetooth, Ethernet MAC)
+  - Battery & Storage table (level, charge status, plugged, total/used/free)
+  - Status cards with green/red/grey dot indicators: Activation, iCloud Lock, Find My, Passcode, Developer Mode
+  - Live screenshot panel (auto-refreshes every 4 s; shows "Requires Developer Mode" when unavailable on iOS 16+)
 - Screenshot — capture and preview in-app
 - Apps — list user/system apps, install `.ipa`, uninstall
-- Photos & Videos — thumbnail grid browser with:
+- Photos & Videos — full media browser:
   - Viewport-aware lazy loading (visible items first)
-  - HEIC thumbnail support via pillow-heif
+  - HEIC thumbnail and full-resolution support via pillow-heif
+  - Resizable preview pane via QSplitter drag handle
+  - Pop-out floating photo window with Fit/Full-Size toggle
+  - Full-resolution photo preview with EXIF metadata (dimensions, date)
   - Video preview with built-in player (play/pause/seek)
   - Video thumbnails via OpenCV (generated on first preview)
   - Concurrent AFC stat calls for fast folder listing

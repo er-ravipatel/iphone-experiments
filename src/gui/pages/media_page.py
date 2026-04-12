@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QListWidget, QListWidgetItem,
     QFileDialog, QProgressBar, QSizePolicy, QStackedWidget, QSlider,
+    QSplitter, QScrollArea,
 )
 from PySide6.QtCore import Qt, QThread, Signal, QSize, QTimer, QUrl
 from PySide6.QtGui import QColor, QIcon, QPixmap, QImage, QPainter, QFont
@@ -274,6 +275,132 @@ class _ThumbnailWorker(QThread):
         self.thumbnail_ready.emit(i, jpeg)
 
 
+class _PhotoPopout(QWidget):
+    """Floating full-resolution photo viewer window."""
+
+    def __init__(self, local_path: str, ext: str, title: str) -> None:
+        super().__init__(None, Qt.Window)
+        self.setWindowTitle(f"Preview — {title}")
+        self.setAttribute(Qt.WA_DeleteOnClose)
+        self.resize(960, 720)
+        self._worker: _PhotoDecodeWorker | None = None
+
+        vbox = QVBoxLayout(self)
+        vbox.setContentsMargins(8, 8, 8, 8)
+        vbox.setSpacing(6)
+
+        # Toolbar
+        bar = QHBoxLayout()
+        self._fit_btn = QPushButton("Fit to Window")
+        self._fit_btn.setCheckable(True)
+        self._fit_btn.setChecked(True)
+        self._fit_btn.clicked.connect(self._toggle_fit)
+        bar.addWidget(self._fit_btn)
+        bar.addStretch()
+        self._info_lbl = QLabel()
+        self._info_lbl.setStyleSheet("color: #616161; font-size: 11px;")
+        bar.addWidget(self._info_lbl)
+        vbox.addLayout(bar)
+
+        # Scroll area + image label
+        self._scroll = QScrollArea()
+        self._scroll.setAlignment(Qt.AlignCenter)
+        self._scroll.setStyleSheet("QScrollArea { background: #0d0d0d; border: none; }")
+        self._img_lbl = QLabel("Loading…")
+        self._img_lbl.setAlignment(Qt.AlignCenter)
+        self._img_lbl.setStyleSheet("background: transparent; color: #555;")
+        self._scroll.setWidget(self._img_lbl)
+        self._scroll.setWidgetResizable(True)
+        vbox.addWidget(self._scroll, stretch=1)
+
+        self._local_path = local_path
+        self._ext = ext
+        self._full_pixmap = QPixmap()
+        self._fit_mode = True
+
+        self._load()
+        self.show()
+
+    def _load(self) -> None:
+        if self._ext in _RENDERABLE:
+            img = QImage(self._local_path)
+            if not img.isNull():
+                self._full_pixmap = QPixmap.fromImage(img)
+                self._apply_pixmap()
+            else:
+                self._img_lbl.setText("Cannot render image")
+        else:
+            self._worker = _PhotoDecodeWorker(self._local_path, self._ext, 8000)
+            self._worker.ready.connect(self._on_decoded)
+            self._worker.start()
+
+    def _on_decoded(self, px: QPixmap) -> None:
+        self._full_pixmap = px
+        self._apply_pixmap()
+
+    def _apply_pixmap(self) -> None:
+        if self._full_pixmap.isNull():
+            self._img_lbl.setText("Cannot render image")
+            return
+        w, h = self._full_pixmap.width(), self._full_pixmap.height()
+        self._info_lbl.setText(f"{w} × {h} px")
+        self._render()
+
+    def _render(self) -> None:
+        if self._full_pixmap.isNull():
+            return
+        if self._fit_mode:
+            avail = self._scroll.viewport().size()
+            px = self._full_pixmap.scaled(avail, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        else:
+            px = self._full_pixmap
+        self._img_lbl.setPixmap(px)
+
+    def _toggle_fit(self, checked: bool) -> None:
+        self._fit_mode = checked
+        self._fit_btn.setText("Fit to Window" if checked else "Full Size")
+        self._scroll.setWidgetResizable(checked)
+        self._render()
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        if self._fit_mode:
+            self._render()
+
+
+class _PhotoDecodeWorker(QThread):
+    """Decodes a HEIC/non-renderable photo via Pillow and emits a scaled QPixmap."""
+    ready = Signal(QPixmap)
+
+    def __init__(self, path: str, ext: str, panel_w: int = 300) -> None:
+        super().__init__()
+        self._path = path
+        self._ext  = ext
+        self._pw   = panel_w
+
+    def run(self) -> None:
+        import io
+        px = QPixmap()
+        try:
+            from PIL import Image as PilImage
+            if self._ext in {'.heic', '.heif'}:
+                import pillow_heif
+                pillow_heif.register_heif_opener()
+            with PilImage.open(self._path) as im:
+                copy = im.copy()
+                if copy.mode not in ('RGB', 'RGBA'):
+                    copy = copy.convert('RGB')
+                copy.thumbnail((self._pw, self._pw))
+                buf = io.BytesIO()
+                copy.save(buf, format='JPEG', quality=88)
+                img = QImage.fromData(buf.getvalue())
+                if not img.isNull():
+                    px = QPixmap.fromImage(img)
+        except Exception:
+            pass
+        self.ready.emit(px)
+
+
 class _DownloadOpenWorker(QThread):
     """Downloads one file to the cache dir then signals the local path."""
     ready  = Signal(str)
@@ -458,17 +585,17 @@ class MediaPage(QWidget):
         toolbar.addStretch()
 
         self._export_sel_btn = QPushButton("Export Selected")
-        self._export_sel_btn.setFixedWidth(130)
+        self._export_sel_btn.setMinimumWidth(80)
         self._export_sel_btn.clicked.connect(self._on_export_selected)
         toolbar.addWidget(self._export_sel_btn)
 
         self._export_all_btn = QPushButton("Export All")
-        self._export_all_btn.setFixedWidth(90)
+        self._export_all_btn.setMinimumWidth(70)
         self._export_all_btn.clicked.connect(self._on_export_all)
         toolbar.addWidget(self._export_all_btn)
 
         self._export_bulk_btn = QPushButton("Export All Subfolders")
-        self._export_bulk_btn.setFixedWidth(150)
+        self._export_bulk_btn.setMinimumWidth(80)
         self._export_bulk_btn.setToolTip("Recursively export every media file under this folder")
         self._export_bulk_btn.clicked.connect(self._on_export_bulk)
         toolbar.addWidget(self._export_bulk_btn)
@@ -502,11 +629,32 @@ class MediaPage(QWidget):
         self._progress.setVisible(False)
         right_vbox.addWidget(self._progress)
 
-        body.addWidget(right, stretch=1)
+        # Allow the grid panel to shrink freely when splitter handle is dragged left
+        right.setMinimumWidth(0)
+        self._grid.setMinimumWidth(0)
 
-        # Preview panel (right side)
-        body.addWidget(self._build_preview_panel())
+        # Inner splitter: grid (stretch) | preview (resizable, hidden by default)
+        self._inner_splitter = QSplitter(Qt.Horizontal)
+        self._inner_splitter.setChildrenCollapsible(False)
+        self._inner_splitter.setHandleWidth(4)
+        self._inner_splitter.setStyleSheet(
+            "QSplitter::handle:horizontal {"
+            "  background: #333; width: 4px;"
+            "  border-left: 1px solid #272727; border-right: 1px solid #272727;"
+            "}"
+            "QSplitter::handle:horizontal:hover { background: #4fc3f7; }"
+        )
+        self._inner_splitter.addWidget(right)
+        self._preview_panel = self._build_preview_panel()
+        self._preview_panel.setMinimumWidth(180)
+        self._preview_panel_width = 340   # remembered width across hide/show
+        self._preview_panel.setVisible(False)
+        self._inner_splitter.addWidget(self._preview_panel)
+        self._inner_splitter.setStretchFactor(0, 1)
+        self._inner_splitter.setStretchFactor(1, 0)
+        self._inner_splitter.setSizes([800, 0])
 
+        body.addWidget(self._inner_splitter, stretch=1)
         outer.addLayout(body, stretch=1)
 
         self._result_lbl = QLabel()
@@ -516,11 +664,11 @@ class MediaPage(QWidget):
 
     def _build_preview_panel(self) -> QWidget:
         panel = QWidget()
-        panel.setFixedWidth(320)
         vbox = QVBoxLayout(panel)
         vbox.setContentsMargins(0, 0, 0, 0)
         vbox.setSpacing(6)
 
+        # Header row: label
         hdr = QLabel("PREVIEW")
         hdr.setObjectName("SectionLabel")
         vbox.addWidget(hdr)
@@ -532,7 +680,7 @@ class MediaPage(QWidget):
         )
 
         # 0 — placeholder
-        ph = QLabel("Click a video\nto preview")
+        ph = QLabel("Select a file\nto preview")
         ph.setAlignment(Qt.AlignCenter)
         ph.setStyleSheet("color: #383838; font-size: 13px; background: transparent;")
         self._preview_stack.addWidget(ph)
@@ -579,18 +727,45 @@ class MediaPage(QWidget):
             no_vid.setStyleSheet("color: #555; font-size: 11px; background: transparent;")
             self._preview_stack.addWidget(no_vid)
 
+        # 2 — photo
+        photo_w = QWidget()
+        photo_w.setStyleSheet("background: transparent;")
+        photo_vbox = QVBoxLayout(photo_w)
+        photo_vbox.setContentsMargins(4, 4, 4, 4)
+        photo_vbox.setSpacing(6)
+        self._photo_img_lbl = QLabel()
+        self._photo_img_lbl.setAlignment(Qt.AlignCenter)
+        self._photo_img_lbl.setMinimumHeight(160)
+        self._photo_img_lbl.setStyleSheet("background: transparent;")
+        photo_vbox.addWidget(self._photo_img_lbl, stretch=1)
+        self._photo_meta_lbl = QLabel()
+        self._photo_meta_lbl.setWordWrap(True)
+        self._photo_meta_lbl.setTextFormat(Qt.RichText)
+        self._photo_meta_lbl.setStyleSheet("color: #757575; font-size: 11px; background: transparent;")
+        photo_vbox.addWidget(self._photo_meta_lbl)
+        self._preview_stack.addWidget(photo_w)   # index 2
+
         vbox.addWidget(self._preview_stack, stretch=1)
 
-        # File info
+        # File info / actions
         self._prev_name_lbl = QLabel()
         self._prev_name_lbl.setObjectName("StatusLabel")
         self._prev_name_lbl.setWordWrap(True)
         vbox.addWidget(self._prev_name_lbl)
 
+        btn_row = QHBoxLayout()
         self._prev_open_btn = QPushButton("Open in System App")
         self._prev_open_btn.setEnabled(False)
         self._prev_open_btn.clicked.connect(self._on_preview_open_sys)
-        vbox.addWidget(self._prev_open_btn)
+        btn_row.addWidget(self._prev_open_btn)
+
+        self._popout_btn = QPushButton("⤢ Pop Out")
+        self._popout_btn.setEnabled(False)
+        self._popout_btn.setToolTip("Open in floating window")
+        self._popout_btn.clicked.connect(self._pop_out_preview)
+        btn_row.addWidget(self._popout_btn)
+
+        vbox.addLayout(btn_row)
 
         return panel
 
@@ -735,22 +910,30 @@ class MediaPage(QWidget):
         f = self._media_files[row]
         ext = Path(f["name"]).suffix.lower()
 
-        # Photos: clear/close the preview panel
-        if ext not in VIDEO_EXTENSIONS:
-            self._clear_preview()
-            return
-
+        self._show_preview_panel()
         self._preview_row = row
         self._prev_name_lbl.setText(f["name"])
         self._prev_open_btn.setEnabled(False)
+        self._popout_btn.setEnabled(False)
 
         local = str(self._cache / f["name"])
+
+        if ext not in VIDEO_EXTENSIONS:
+            if self._player:
+                self._player.stop()
+                self._player.setSource(QUrl())
+            if Path(local).exists():
+                self._preview_local = local
+                self._prev_open_btn.setEnabled(True)
+                self._popout_btn.setEnabled(True)
+            self._show_photo_preview(row, f)
+            return
 
         if Path(local).exists():
             self._preview_local = local
             self._prev_open_btn.setEnabled(True)
-            self._show_preview(local, ext)
-            # Generate grid thumbnail if not already cached
+            self._popout_btn.setEnabled(True)
+            self._show_video_preview(local, ext)
             thumb_path = self._cache / ("_thumb_" + Path(f["name"]).stem + ".jpg")
             if not thumb_path.exists():
                 self._try_update_thumb(row, local)
@@ -771,23 +954,143 @@ class MediaPage(QWidget):
         self._set_result("")
         self._preview_local = local
         self._prev_open_btn.setEnabled(True)
-        self._show_preview(local, ext)
-        # Update grid thumbnail for videos now that we have the file
+        self._popout_btn.setEnabled(True)
         if ext in VIDEO_EXTENSIONS:
+            self._show_video_preview(local, ext)
             self._try_update_thumb(row, local)
+        else:
+            self._show_photo_preview(row, self._media_files[row])
 
-    def _show_preview(self, local: str, ext: str) -> None:
-        """Start video playback in the preview panel (videos only)."""
+    def _show_video_preview(self, local: str, ext: str) -> None:
+        """Start video playback in the preview panel."""
         if not _HAS_MULTIMEDIA or not self._player:
             return
         self._player.stop()
-        self._preview_stack.setCurrentIndex(1)   # video widget is at index 1 now
+        self._preview_stack.setCurrentIndex(1)
         self._play_btn.setText("▶")
         self._seek_slider.setValue(0)
         self._time_lbl.setText("0:00")
         self._player.setSource(QUrl.fromLocalFile(local))
         self._player.play()
         self._play_btn.setText("⏸")
+
+    def _show_photo_preview(self, row: int, f: dict) -> None:
+        """Show full-resolution photo in the preview panel. Downloads if not cached."""
+        ext = Path(f["name"]).suffix.lower()
+        thumb_path = self._cache / ("_thumb_" + Path(f["name"]).stem + ".jpg")
+        full_path  = self._cache / f["name"]
+        local      = str(full_path)
+
+        self._preview_stack.setCurrentIndex(2)
+        self._photo_img_lbl.setPixmap(QPixmap())
+
+        size_str = _fmt_size(f.get("size", 0))
+        self._photo_meta_lbl.setText(
+            f"<b>{f['name']}</b><br>"
+            f"<font color='#555'>Path:</font> {f['path']}<br>"
+            f"<font color='#555'>Size:</font> {size_str}"
+        )
+
+        if full_path.exists():
+            # Full file available — decode and show at full quality
+            self._decode_and_show_photo(local, ext, f, size_str)
+        else:
+            # Not cached yet — show thumbnail as placeholder while downloading
+            if thumb_path.exists():
+                img = QImage(str(thumb_path))
+                if not img.isNull():
+                    pw = max(self._preview_panel.width() - 16, 280)
+                    self._photo_img_lbl.setPixmap(
+                        QPixmap.fromImage(img.scaled(pw, pw, Qt.KeepAspectRatio,
+                                                     Qt.SmoothTransformation))
+                    )
+                self._photo_img_lbl.setText("Downloading full photo…")
+            else:
+                self._photo_img_lbl.setText("Downloading…")
+
+            self._set_result(f"Downloading {f['name']}…")
+            self._preview_worker = _DownloadOpenWorker(self._udid, f["path"], local)
+            self._preview_worker.ready.connect(
+                lambda p, r=row, e=ext: self._on_preview_ready(p, e, r)
+            )
+            self._preview_worker.failed.connect(
+                lambda err: (self._set_result(f"Download failed: {err}", "#ef5350"),
+                             self._photo_img_lbl.setText("Download failed"))
+            )
+            self._track(self._preview_worker)
+            self._preview_worker.start()
+
+    def _decode_and_show_photo(self, local: str, ext: str, f: dict, size_str: str) -> None:
+        """Decode a downloaded photo and show it. Handles JPEG/PNG directly, HEIC via worker."""
+        pw = max(self._preview_panel.width() - 16, 280)
+        if ext in _RENDERABLE:
+            img = QImage(local)
+            if not img.isNull():
+                self._photo_img_lbl.setText("")
+                self._photo_img_lbl.setPixmap(
+                    QPixmap.fromImage(img.scaled(pw, pw, Qt.KeepAspectRatio,
+                                                 Qt.SmoothTransformation))
+                )
+            else:
+                self._photo_img_lbl.setText("Cannot render preview")
+            threading.Thread(
+                target=self._fetch_photo_meta,
+                args=(local, ext, f, size_str),
+                daemon=True,
+            ).start()
+        else:
+            # HEIC / other — decode via QThread so the main thread never blocks
+            self._photo_img_lbl.setText("Decoding…")
+            w = _PhotoDecodeWorker(local, ext, pw)
+            w.ready.connect(
+                lambda px, fw=f, ss=size_str, ex=ext: self._apply_photo_pixmap(px, fw, ss, ex)
+            )
+            self._track(w)
+            w.start()
+
+    def _apply_photo_pixmap(self, px: QPixmap, f: dict, size_str: str,
+                            ext: str) -> None:
+        """Main-thread slot: apply decoded photo pixmap and trigger meta fetch."""
+        self._photo_img_lbl.setText("")
+        if px.isNull():
+            self._photo_img_lbl.setText("Cannot render preview")
+        else:
+            self._photo_img_lbl.setPixmap(px)
+        full_path = self._cache / f["name"]
+        threading.Thread(
+            target=self._fetch_photo_meta,
+            args=(str(full_path), ext, f, size_str),
+            daemon=True,
+        ).start()
+
+    def _fetch_photo_meta(self, img_src: str, ext: str, f: dict, size_str: str) -> None:
+        """Background thread: read EXIF/dimensions from Pillow, then update label via signal."""
+        width = height = 0
+        date_str = ""
+        try:
+            from PIL import Image as PilImage
+            if ext in {'.heic', '.heif'}:
+                import pillow_heif
+                pillow_heif.register_heif_opener()
+            with PilImage.open(img_src) as im:
+                width, height = im.size
+                exif = im._getexif() if hasattr(im, '_getexif') else None
+                if exif:
+                    date_str = str(exif.get(36867) or exif.get(306) or "")
+        except Exception:
+            pass
+
+        dim_str = f"{width} × {height} px" if width else ""
+        meta_html = (
+            f"<b>{f['name']}</b><br>"
+            f"<font color='#555'>Path:</font> {f['path']}<br>"
+            f"<font color='#555'>Size:</font> {size_str}"
+            + (f"<br><font color='#555'>Dimensions:</font> {dim_str}" if dim_str else "")
+            + (f"<br><font color='#555'>Date:</font> {date_str}" if date_str else "")
+        )
+        # Post to main thread via the label's thread-safe setText via invokeMethod
+        self._photo_meta_lbl.setProperty("_pending_html", meta_html)
+        QTimer.singleShot(0, lambda html=meta_html: self._photo_meta_lbl.setText(html))
 
     def _on_preview_open_sys(self) -> None:
         if self._preview_local and Path(self._preview_local).exists():
@@ -836,8 +1139,41 @@ class MediaPage(QWidget):
         self._preview_stack.setCurrentIndex(0)
         self._prev_name_lbl.setText("")
         self._prev_open_btn.setEnabled(False)
+        self._popout_btn.setEnabled(False)
+        self._photo_img_lbl.setPixmap(QPixmap())
+        self._photo_meta_lbl.setText("")
         self._preview_local = None
         self._preview_row   = -1
+        self._hide_preview_panel()
+
+    # ── Preview panel show / hide / pop-out ───────────────────────────────
+
+    def _show_preview_panel(self) -> None:
+        sizes = self._inner_splitter.sizes()
+        if not self._preview_panel.isVisible() or sizes[1] < 10:
+            total = sum(sizes) or (self._inner_splitter.width() or 800)
+            w = min(self._preview_panel_width, total - 200)
+            self._preview_panel.setVisible(True)
+            self._inner_splitter.setSizes([total - w, w])
+
+    def _hide_preview_panel(self) -> None:
+        sizes = self._inner_splitter.sizes()
+        if sizes[1] > 10:
+            self._preview_panel_width = sizes[1]   # remember for next open
+        self._preview_panel.setVisible(False)
+        total = sum(sizes)
+        self._inner_splitter.setSizes([total, 0])
+
+    def _pop_out_preview(self) -> None:
+        """Open current preview in a floating window."""
+        if self._preview_stack.currentIndex() == 2 and self._preview_local:
+            # Photo pop-out
+            ext = Path(self._preview_local).suffix.lower()
+            name = Path(self._preview_local).name
+            self._popout_win = _PhotoPopout(self._preview_local, ext, name)
+        elif self._preview_stack.currentIndex() == 1 and self._preview_local:
+            # Video — open in system player
+            _open_system(self._preview_local)
 
     def _on_folder_clicked(self, item: QListWidgetItem) -> None:
         """Single click — show folder's files in the right grid; left panel stays."""
