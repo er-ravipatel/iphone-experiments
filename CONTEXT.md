@@ -7,6 +7,25 @@
 - This repo is the source of truth for ongoing work.
 - The earlier mistaken copy under `C:\Workspace\Personal\iphone-storage-explorer\iphone-experiments` is no longer in use and has been removed.
 
+## Agent Handoff Summary
+
+- Default branch for continued work: `feature-desktop-ui`
+- Current repo state: clean working tree at the moment this context was refreshed
+- Recently completed:
+  - desktop icon system in `src/gui/icon.py`
+  - system tray manager in `src/gui/tray.py`
+  - app/tray/taskbar icon wiring in `desktop.py`, `src/gui/app.py`, and `src/gui/main_window.py`
+  - permanent icon assets in `assets/app-icon.svg`, `assets/app-icon.png`, `assets/app-icon.ico`
+  - tray notifications for device connected, disconnected, low battery, and low storage
+- Important known issue:
+  - desktop media video thumbnails are still not fully fixed and should be treated as open work
+- Remaining major GUI milestones:
+  - Files page
+  - Backup & Restore page
+  - Screen Mirror page migration from scaffold to PySide6
+  - Settings page
+  - packaging desktop app as a standalone Windows executable for best taskbar identity
+
 ## Goal
 
 This repository explores a terminal-first iPhone management tool for Windows and other desktop platforms. The main direction is to keep the terminal app as the control center while using separate windows only when a richer visual surface is required, such as screen mirroring.

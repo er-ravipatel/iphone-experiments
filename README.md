@@ -9,6 +9,24 @@ Cross-platform iPhone management tool with both a terminal CLI and a full PySide
 - Active development branch: `feature-desktop-ui`
 - Old mistaken workspace copy under `C:\Workspace\Personal\iphone-storage-explorer\iphone-experiments` is no longer active and has been removed.
 
+## Agent Handoff
+
+- Source of truth: this repo and this workspace path
+- Branch to continue on by default: `feature-desktop-ui`
+- Latest completed work:
+  - desktop app branding/icon system added
+  - permanent icon assets added under `assets/`
+  - system tray integration added
+  - tray notifications added for connect, disconnect, low battery, and low storage
+  - workspace/context docs updated to reflect the correct repo path
+- Highest-priority known gap:
+  - video thumbnails in the desktop media page still need a proper fix
+- Major desktop pages still pending:
+  - Files
+  - Backup & Restore
+  - Screen Mirror
+  - Settings
+
 ## Entry Points
 
 | Mode | Command |
