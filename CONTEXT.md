@@ -114,26 +114,58 @@ Entry point: `desktop.py` → `src/gui/main_window.py`
 
 ## MediaPage — Photos & Videos
 
-**File:** `src/gui/pages/media_page.py`
+**File:** `src/gui/pages/media_page.py` (1 525 lines — refactor planned, see below)
 
-### Preview pane (updated)
+### Layout (current)
+- **Top bar**: title + summary label + Export Selected / Export All / Export All Subfolders buttons + status label — lives above the splitter so buttons never compress on drag
+- **Body**: `QSplitter` → left folder list (200 px fixed) | `_GripSplitter` → MEDIA grid | PREVIEW panel
 
-- Hidden by default, shown when any file is selected.
-- **Resizable**: implemented as `QSplitter` between grid and preview panel (`self._inner_splitter`). Panel width is remembered in `self._preview_panel_width` and restored on next open.
-- **Pop-out button**: "⤢ Pop Out" button opens `_PhotoPopout(QWidget, Qt.Window)` — floating window with Fit/Full-Size toggle and scroll area for panning.
-- **Photo preview** (stack index 2):
-  - Shows full-resolution photo, not thumbnail.
-  - JPEG/PNG: loaded directly with `QImage(path)` on main thread (fast, Qt-native).
-  - HEIC: decoded by `_PhotoDecodeWorker(QThread)` via Pillow + pillow-heif, emits `QPixmap` via signal.
-  - If full file not cached: shows thumbnail as placeholder, downloads file in background via `_DownloadOpenWorker`, then replaces with full-res on completion.
-  - EXIF metadata (dimensions, date taken) read in `threading.Thread`, updates label via `QTimer.singleShot(0, lambda html=...: label.setText(html))`.
-- **Video preview** (stack index 1): unchanged — `QMediaPlayer` + `QVideoWidget`, auto-play on click.
-- `_clear_preview()` hides panel and stops any playing video.
-- `_show_preview_panel()` / `_hide_preview_panel()` manage splitter sizes.
-- Video pop-out: opens file in system player via `_open_system()` (moving `QMediaPlayer` between windows is not supported in Qt).
+### Splitter / drag
+- `_GripSplitter` / `_GripSplitterHandle`: custom `QSplitter` subclass — paints 3 grip dots on handle, turns blue on hover. Handle width 10 px.
+- Grid panel min-width 0 (free to shrink). "MEDIA" section label auto-hides via `_on_splitter_moved` when grid panel < 120 px.
+- Preview panel min-width 180 px; width remembered in `_preview_panel_width` across hide/show.
 
-### Toolbar buttons
-Removed `setFixedWidth` from Export buttons — replaced with `setMinimumWidth`. This allows the splitter handle to move left freely (fixed widths were forcing a minimum width on the grid panel that blocked leftward drag).
+### Thumbnail grid
+- `ITEM_SIZE = 162`, `THUMB_SIZE = 155`, `setSpacing(2)` — tight grid with minimal gaps between thumbnails.
+- Section labels: FOLDERS / MEDIA / PREVIEW — all use `SectionLabel` object name for consistent style.
+
+### Preview pane
+- Hidden by default; shown on file selection; **cleared on folder switch** (`_clear_preview()` called in `_on_folder_clicked`, `_on_folder_dbl`, `_on_back`).
+- **Arrow-key debounce**: `eventFilter` on `self._grid` intercepts arrow keys → restarts `_preview_debounce` (`QTimer`, 400 ms single-shot). Preview only loads after 400 ms of inactivity — rapid arrow-key scrolling does not trigger loads.
+- **Resizable**: `_inner_splitter` splitter; panel width remembered.
+- **Pop-out**: `_PhotoPopout(QWidget, Qt.Window)` — Fit/Full-Size toggle, scroll panning.
+- **Photo preview** (stack index 2): full-resolution; JPEG/PNG via `QImage` on main thread; HEIC via `_PhotoDecodeWorker(QThread)`; placeholder thumbnail while downloading.
+- **Video preview** (stack index 1): `QMediaPlayer` + `QVideoWidget`, auto-play on click.
+- EXIF metadata (dimensions, date taken) via background `threading.Thread`.
+
+### Pending refactor — SRP decomposition (planned, not started)
+Current `media_page.py` is 1 525 lines with mixed responsibilities. Planned split:
+
+```
+src/gui/pages/media/
+    __init__.py          ← re-exports MediaPage (no breaking change to callers)
+    page.py              ← MediaPage orchestrator only (~150 lines)
+    workers.py           ← all QThread workers (_ListDirWorker, _ThumbnailWorker, etc.)
+    preview_panel.py     ← PreviewPanel widget (photo + video + debounce + pop-out)
+    thumbnail_grid.py    ← ThumbnailGrid widget (folder list + grid + lazy loading)
+    export_controller.py ← ExportController (scan + export + progress callbacks)
+    widgets.py           ← _GripSplitter, _GripSplitterHandle, _PhotoPopout
+```
+
+Signal contracts:
+- `ThumbnailGrid.file_selected(file_dict, row)` → `PreviewPanel.load(file, row)`
+- `ThumbnailGrid.folder_changed()` → `PreviewPanel.clear()`
+- `ThumbnailGrid.selection_changed(items)` → `ExportController.set_selection(items)`
+- `ExportController.progress/done/failed` → `MediaPage` (updates progress bar)
+
+**Migration order** (each step leaves app runnable):
+1. Create `media/` package, move file → `media/page.py`, add `__init__.py` shim
+2. Extract `workers.py`
+3. Extract `widgets.py`
+4. Extract `preview_panel.py`
+5. Extract `thumbnail_grid.py`
+6. Extract `export_controller.py`
+7. Slim `page.py` to orchestrator
 
 ---
 
@@ -163,6 +195,7 @@ Removed `setFixedWidth` from Export buttons — replaced with `setMinimumWidth`.
 | 7 | Screen Mirror | port tkinter scaffold to PySide6 + live stream (needs dev mode) |
 
 **Other open items:**
+- **MediaPage SRP refactor** — decompose `media_page.py` into `src/gui/pages/media/` package (see MediaPage section above for full plan)
 - Video thumbnail improvement: extract frame without downloading full file (partial download or on-device frame extraction)
 - Suppress OpenCV ffmpeg stderr noise when extracting video frames
 - Package desktop app as standalone Windows `.exe`

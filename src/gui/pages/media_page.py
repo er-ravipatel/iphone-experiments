@@ -21,9 +21,9 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QListWidget, QListWidgetItem,
     QFileDialog, QProgressBar, QSizePolicy, QStackedWidget, QSlider,
-    QSplitter, QScrollArea,
+    QSplitter, QSplitterHandle, QScrollArea,
 )
-from PySide6.QtCore import Qt, QThread, Signal, QSize, QTimer, QUrl
+from PySide6.QtCore import Qt, QThread, Signal, QSize, QTimer, QUrl, QEvent
 from PySide6.QtGui import QColor, QIcon, QPixmap, QImage, QPainter, QFont
 
 try:
@@ -43,8 +43,37 @@ from ...terminal.features.media import (
 _RENDERABLE = {'.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.webp'}
 
 THUMB_SIZE  = 155   # icon canvas
-ITEM_SIZE   = 175   # grid cell width
+ITEM_SIZE   = 162   # grid cell width (7px padding around thumb)
 LABEL_CHARS = 14    # max chars shown under each thumbnail
+
+
+class _GripSplitterHandle(QSplitterHandle):
+    """Splitter handle that paints three dot-pairs as a grip affordance."""
+
+    def paintEvent(self, event):  # noqa: N802
+        super().paintEvent(event)
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        dot_color = QColor("#5a5a5a")
+        hover_color = QColor("#4fc3f7")
+        # Detect hover via underMouse
+        color = hover_color if self.underMouse() else dot_color
+        p.setBrush(color)
+        p.setPen(Qt.NoPen)
+        cx = self.width() // 2
+        cy = self.height() // 2
+        r = 2  # dot radius
+        gap = 5  # vertical gap between dot centres
+        for dy in (-gap, 0, gap):
+            p.drawEllipse(cx - r, cy + dy - r, r * 2, r * 2)
+        p.end()
+
+
+class _GripSplitter(QSplitter):
+    """QSplitter that uses _GripSplitterHandle for visual drag affordance."""
+
+    def createHandle(self):  # noqa: N802
+        return _GripSplitterHandle(self.orientation(), self)
 
 
 # ── Utilities ──────────────────────────────────────────────────────────────────
@@ -525,14 +554,34 @@ class MediaPage(QWidget):
         outer.setContentsMargins(24, 20, 24, 20)
         outer.setSpacing(10)
 
-        # Title row
+        # Title row — title + export buttons + status label
         title_row = QHBoxLayout()
         title = QLabel("Photos & Videos")
         title.setObjectName("PageTitle")
         title_row.addWidget(title)
+        title_row.addSpacing(16)
+
+        self._summary_lbl = QLabel()
+        self._summary_lbl.setObjectName("StatusLabel")
+        title_row.addWidget(self._summary_lbl)
         title_row.addStretch()
+
+        self._export_sel_btn = QPushButton("Export Selected")
+        self._export_sel_btn.clicked.connect(self._on_export_selected)
+        title_row.addWidget(self._export_sel_btn)
+
+        self._export_all_btn = QPushButton("Export All")
+        self._export_all_btn.clicked.connect(self._on_export_all)
+        title_row.addWidget(self._export_all_btn)
+
+        self._export_bulk_btn = QPushButton("Export All Subfolders")
+        self._export_bulk_btn.setToolTip("Recursively export every media file under this folder")
+        self._export_bulk_btn.clicked.connect(self._on_export_bulk)
+        title_row.addWidget(self._export_bulk_btn)
+
         self._status = QLabel()
         self._status.setObjectName("StatusLabel")
+        title_row.addSpacing(12)
         title_row.addWidget(self._status)
         outer.addLayout(title_row)
 
@@ -571,43 +620,22 @@ class MediaPage(QWidget):
 
         body.addWidget(left)
 
-        # Right — toolbar + grid + progress
+        # Right — grid + progress
         right = QWidget()
         right_vbox = QVBoxLayout(right)
         right_vbox.setContentsMargins(0, 0, 0, 0)
-        right_vbox.setSpacing(8)
+        right_vbox.setSpacing(6)
 
-        toolbar = QHBoxLayout()
-        toolbar.setSpacing(8)
-        self._summary_lbl = QLabel()
-        self._summary_lbl.setObjectName("StatusLabel")
-        toolbar.addWidget(self._summary_lbl)
-        toolbar.addStretch()
-
-        self._export_sel_btn = QPushButton("Export Selected")
-        self._export_sel_btn.setMinimumWidth(80)
-        self._export_sel_btn.clicked.connect(self._on_export_selected)
-        toolbar.addWidget(self._export_sel_btn)
-
-        self._export_all_btn = QPushButton("Export All")
-        self._export_all_btn.setMinimumWidth(70)
-        self._export_all_btn.clicked.connect(self._on_export_all)
-        toolbar.addWidget(self._export_all_btn)
-
-        self._export_bulk_btn = QPushButton("Export All Subfolders")
-        self._export_bulk_btn.setMinimumWidth(80)
-        self._export_bulk_btn.setToolTip("Recursively export every media file under this folder")
-        self._export_bulk_btn.clicked.connect(self._on_export_bulk)
-        toolbar.addWidget(self._export_bulk_btn)
-
-        right_vbox.addLayout(toolbar)
+        self._grid_lbl = QLabel("MEDIA")
+        self._grid_lbl.setObjectName("SectionLabel")
+        right_vbox.addWidget(self._grid_lbl)
 
         # Thumbnail grid
         self._grid = QListWidget()
         self._grid.setViewMode(QListWidget.IconMode)
         self._grid.setIconSize(QSize(THUMB_SIZE, THUMB_SIZE))
-        self._grid.setGridSize(QSize(ITEM_SIZE, ITEM_SIZE + 32))
-        self._grid.setSpacing(4)
+        self._grid.setGridSize(QSize(ITEM_SIZE, ITEM_SIZE + 28))
+        self._grid.setSpacing(2)
         self._grid.setResizeMode(QListWidget.Adjust)
         self._grid.setUniformItemSizes(True)
         self._grid.setMovement(QListWidget.Static)
@@ -621,6 +649,13 @@ class MediaPage(QWidget):
         self._grid.itemDoubleClicked.connect(self._on_item_dbl)
         self._grid.itemSelectionChanged.connect(self._on_selection_changed)
         self._grid.verticalScrollBar().valueChanged.connect(self._on_scroll)
+
+        # Arrow-key preview debounce: wait 1 s of inactivity before loading preview
+        self._preview_debounce = QTimer(self)
+        self._preview_debounce.setSingleShot(True)
+        self._preview_debounce.setInterval(400)
+        self._preview_debounce.timeout.connect(self._on_preview_debounce_fire)
+        self._grid.installEventFilter(self)
         right_vbox.addWidget(self._grid, stretch=1)
 
         self._progress = QProgressBar()
@@ -629,20 +664,20 @@ class MediaPage(QWidget):
         self._progress.setVisible(False)
         right_vbox.addWidget(self._progress)
 
-        # Allow the grid panel to shrink freely when splitter handle is dragged left
+        # Grid panel can shrink freely — toolbar buttons are in the page header
         right.setMinimumWidth(0)
         self._grid.setMinimumWidth(0)
 
         # Inner splitter: grid (stretch) | preview (resizable, hidden by default)
-        self._inner_splitter = QSplitter(Qt.Horizontal)
+        self._inner_splitter = _GripSplitter(Qt.Horizontal)
         self._inner_splitter.setChildrenCollapsible(False)
-        self._inner_splitter.setHandleWidth(4)
+        self._inner_splitter.setHandleWidth(10)
         self._inner_splitter.setStyleSheet(
             "QSplitter::handle:horizontal {"
-            "  background: #333; width: 4px;"
-            "  border-left: 1px solid #272727; border-right: 1px solid #272727;"
+            "  background: #242424;"
+            "  border-left: 1px solid #1a1a1a; border-right: 1px solid #1a1a1a;"
             "}"
-            "QSplitter::handle:horizontal:hover { background: #4fc3f7; }"
+            "QSplitter::handle:horizontal:hover { background: #1e3040; }"
         )
         self._inner_splitter.addWidget(right)
         self._preview_panel = self._build_preview_panel()
@@ -653,6 +688,7 @@ class MediaPage(QWidget):
         self._inner_splitter.setStretchFactor(0, 1)
         self._inner_splitter.setStretchFactor(1, 0)
         self._inner_splitter.setSizes([800, 0])
+        self._inner_splitter.splitterMoved.connect(self._on_splitter_moved)
 
         body.addWidget(self._inner_splitter, stretch=1)
         outer.addLayout(body, stretch=1)
@@ -899,6 +935,19 @@ class MediaPage(QWidget):
             self._thumb_worker.add_priority_rows(self._get_visible_rows())
 
     # ── Preview panel ──────────────────────────────────────────────────────
+
+    def eventFilter(self, obj, event) -> bool:
+        """Restart preview debounce timer when arrow keys are pressed in the grid."""
+        if obj is self._grid and event.type() == QEvent.KeyPress:
+            if event.key() in (Qt.Key_Up, Qt.Key_Down, Qt.Key_Left, Qt.Key_Right):
+                self._preview_debounce.start()   # restarts 1 s countdown
+        return super().eventFilter(obj, event)
+
+    def _on_preview_debounce_fire(self) -> None:
+        """Called 1 s after the last arrow-key press — show preview for current item."""
+        item = self._grid.currentItem()
+        if item:
+            self._on_item_clicked(item)
 
     def _on_item_clicked(self, item: QListWidgetItem) -> None:
         """Single click — preview videos only (photos are ignored)."""
@@ -1148,6 +1197,11 @@ class MediaPage(QWidget):
 
     # ── Preview panel show / hide / pop-out ───────────────────────────────
 
+    def _on_splitter_moved(self, pos: int, index: int) -> None:
+        """Hide the MEDIA section label when the grid panel is too narrow to show it."""
+        grid_width = self._inner_splitter.sizes()[0]
+        self._grid_lbl.setVisible(grid_width >= 120)
+
     def _show_preview_panel(self) -> None:
         sizes = self._inner_splitter.sizes()
         if not self._preview_panel.isVisible() or sizes[1] < 10:
@@ -1179,6 +1233,7 @@ class MediaPage(QWidget):
         """Single click — show folder's files in the right grid; left panel stays."""
         # No _any_busy() guard: _load_right disconnects the old worker's signals
         # before starting a new one, so rapid switching is safe.
+        self._clear_preview()
         folder_path = str(PurePosixPath(self._current_path) / item.text())
         self._load_right(folder_path)
 
@@ -1186,6 +1241,7 @@ class MediaPage(QWidget):
         """Double click — navigate into the folder; reload both panels."""
         if self._any_busy():
             return
+        self._clear_preview()
         self._cancel_thumb_worker()
         self._path_stack.append(self._current_path)
         self._current_path = str(PurePosixPath(self._current_path) / item.text())
@@ -1194,6 +1250,7 @@ class MediaPage(QWidget):
     def _on_back(self) -> None:
         if self._any_busy() or not self._path_stack:
             return
+        self._clear_preview()
         self._cancel_thumb_worker()
         self._current_path = self._path_stack.pop()
         self._load_dir()
