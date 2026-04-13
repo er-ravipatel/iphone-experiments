@@ -7,6 +7,7 @@ Usage:
 The original terminal app remains fully intact:
     python main.py
 """
+import logging
 import os
 import sys
 import pathlib
@@ -31,12 +32,35 @@ if _TOOLS_DIR not in os.environ.get("PATH", ""):
 from src.gui.app import create_app
 from src.gui.main_window import MainWindow
 
+# ── Logging setup ──────────────────────────────────────────────────────────────
+_LOG_FILE = pathlib.Path(__file__).parent / "iphone_desktop.log"
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="%(asctime)s  %(levelname)-8s  %(name)s  %(message)s",
+    handlers=[
+        logging.FileHandler(_LOG_FILE, encoding="utf-8"),
+        logging.StreamHandler(sys.stderr),
+    ],
+)
+# Suppress noisy third-party loggers
+for _noisy in ("asyncio", "pymobiledevice3", "urllib3"):
+    logging.getLogger(_noisy).setLevel(logging.WARNING)
+
+log = logging.getLogger("desktop")
+
 
 def main() -> None:
-    app = create_app(sys.argv)
-    window = MainWindow()
-    window.show()
-    sys.exit(app.exec())
+    log.info("Desktop app starting — log file: %s", _LOG_FILE)
+    try:
+        app = create_app(sys.argv)
+        window = MainWindow()
+        window.show()
+        exit_code = app.exec()
+        log.info("Desktop app exiting with code %d", exit_code)
+        sys.exit(exit_code)
+    except Exception:
+        log.exception("Unhandled exception in main()")
+        raise
 
 
 if __name__ == "__main__":

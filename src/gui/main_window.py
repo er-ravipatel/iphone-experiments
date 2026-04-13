@@ -27,7 +27,7 @@ from .pages.dashboard_page import DashboardPage
 from .pages.diagnostics_page import DiagnosticsPage
 from .pages.screenshot_page import ScreenshotPage
 from .pages.apps_page import AppsPage
-from .pages.media_page import MediaPage
+from .pages.media import MediaPage
 
 
 # ── Background worker ──────────────────────────────────────────────────────────
