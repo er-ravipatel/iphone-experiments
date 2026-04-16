@@ -207,9 +207,20 @@ class DiagnosticsPage(QWidget):
     # ── Right: status cards + screenshot ──────────────────────────────────
 
     def _build_right_panel(self) -> QWidget:
+        # Outer scroll area so the whole right column is reachable at any
+        # window height — the 5 status cards alone occupy ~300 px, leaving
+        # too little room for the screenshot panel without scrolling.
+        outer_scroll = QScrollArea()
+        outer_scroll.setWidgetResizable(True)
+        outer_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        outer_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        outer_scroll.setFrameShape(QFrame.NoFrame)
+        outer_scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
+
         panel = QWidget()
+        panel.setStyleSheet("background: transparent;")
         vbox = QVBoxLayout(panel)
-        vbox.setContentsMargins(0, 0, 0, 0)
+        vbox.setContentsMargins(0, 0, 8, 0)
         vbox.setSpacing(8)
 
         vbox.addWidget(_section_label("DEVICE STATUS"))
@@ -226,35 +237,19 @@ class DiagnosticsPage(QWidget):
 
         vbox.addWidget(_section_label("DEVICE SCREEN"))
 
-        # Screenshot area
+        # Screenshot card — fixed visible area with its own inner scroll for the image
         shot_frame = QWidget()
         shot_frame.setObjectName("Card")
-        shot_frame.setMinimumHeight(200)
+        shot_frame.setMinimumHeight(320)
         shot_vbox = QVBoxLayout(shot_frame)
         shot_vbox.setContentsMargins(6, 6, 6, 6)
-        shot_vbox.setSpacing(4)
+        shot_vbox.setSpacing(6)
 
-        # Scrollable image area — scrollbars appear when screenshot taller than panel
-        self._shot_scroll = QScrollArea()
-        self._shot_scroll.setWidgetResizable(False)
-        self._shot_scroll.setAlignment(Qt.AlignHCenter | Qt.AlignTop)
-        self._shot_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        self._shot_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        self._shot_scroll.setStyleSheet(
-            "QScrollArea { border: none; background: transparent; }"
-            "QScrollArea > QWidget > QWidget { background: transparent; }"
-        )
-
-        self._shot_lbl = QLabel("No screenshot yet")
-        self._shot_lbl.setAlignment(Qt.AlignCenter)
-        self._shot_lbl.setStyleSheet("color: #383838; font-size: 12px; background: transparent;")
-        self._shot_lbl.setMinimumSize(180, 180)
-        self._shot_scroll.setWidget(self._shot_lbl)
-        shot_vbox.addWidget(self._shot_scroll, stretch=1)
-
+        # Capture button row — always visible at the top of the card
         shot_ctrl = QHBoxLayout()
-        self._shot_refresh_btn = QPushButton("Capture")
+        self._shot_refresh_btn = QPushButton("📷  Capture Screenshot")
         self._shot_refresh_btn.setEnabled(False)
+        self._shot_refresh_btn.setFixedHeight(30)
         self._shot_refresh_btn.clicked.connect(self._capture_screenshot)
         shot_ctrl.addWidget(self._shot_refresh_btn)
 
@@ -265,8 +260,31 @@ class DiagnosticsPage(QWidget):
         shot_ctrl.addStretch()
         shot_vbox.addLayout(shot_ctrl)
 
-        vbox.addWidget(shot_frame, stretch=1)
-        return panel
+        # Scrollable image area below the button
+        self._shot_scroll = QScrollArea()
+        self._shot_scroll.setWidgetResizable(False)
+        self._shot_scroll.setAlignment(Qt.AlignHCenter | Qt.AlignTop)
+        self._shot_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self._shot_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self._shot_scroll.setMinimumHeight(240)
+        self._shot_scroll.setStyleSheet(
+            "QScrollArea { border: 1px solid #272727; border-radius: 4px;"
+            "  background: #111111; }"
+            "QScrollArea > QWidget > QWidget { background: transparent; }"
+        )
+
+        self._shot_lbl = QLabel("No screenshot yet")
+        self._shot_lbl.setAlignment(Qt.AlignCenter)
+        self._shot_lbl.setStyleSheet("color: #444; font-size: 12px; background: transparent;")
+        self._shot_lbl.setMinimumSize(180, 220)
+        self._shot_scroll.setWidget(self._shot_lbl)
+        shot_vbox.addWidget(self._shot_scroll, stretch=1)
+
+        vbox.addWidget(shot_frame)
+        vbox.addStretch()
+
+        outer_scroll.setWidget(panel)
+        return outer_scroll
 
     # ── Table population ───────────────────────────────────────────────────
 
