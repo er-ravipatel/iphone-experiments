@@ -29,6 +29,7 @@ from .pages.screenshot_page import ScreenshotPage
 from .pages.apps_page import AppsPage
 from .pages.media import MediaPage
 from .pages.files import FilesPage
+from .pages.backup_restore import BackupRestorePage
 
 
 # ── Background worker ──────────────────────────────────────────────────────────
@@ -55,6 +56,7 @@ _PAGE_SCREENSHOT  = 2
 _PAGE_APPS        = 3
 _PAGE_MEDIA       = 4
 _PAGE_FILES       = 5
+_PAGE_BACKUP      = 6
 
 # (label, page_index_or_None, enabled)
 _NAV_ITEMS: list[tuple[str, int | None, bool]] = [
@@ -64,8 +66,8 @@ _NAV_ITEMS: list[tuple[str, int | None, bool]] = [
     ("Apps",             _PAGE_APPS,        True),
     ("Photos && Videos", _PAGE_MEDIA,       True),
     ("Files",            _PAGE_FILES,       True),
-    # ── Milestone 6+ ──────────────────────────────
-    ("Backup && Restore", None,              False),
+    ("Backup && Restore", _PAGE_BACKUP,     True),
+    # ── Milestone 7+ ──────────────────────────────
     ("Screen Mirror",     None,              False),
     ("Settings",          None,              False),
 ]
@@ -124,13 +126,15 @@ class MainWindow(QMainWindow):
         self._shot_page = ScreenshotPage()
         self._apps_page  = AppsPage()
         self._media_page = MediaPage()
-        self._files_page = FilesPage()
+        self._files_page  = FilesPage()
+        self._backup_page = BackupRestorePage()
         self._stack.addWidget(self._dash_page)    # index 0
         self._stack.addWidget(self._diag_page)    # index 1
         self._stack.addWidget(self._shot_page)    # index 2
         self._stack.addWidget(self._apps_page)    # index 3
         self._stack.addWidget(self._media_page)   # index 4
         self._stack.addWidget(self._files_page)   # index 5
+        self._stack.addWidget(self._backup_page)  # index 6
         body_hbox.addWidget(self._stack)
 
         root_vbox.addWidget(body, stretch=1)
@@ -195,7 +199,7 @@ class MainWindow(QMainWindow):
         vbox.addStretch()
 
         # Version stamp
-        ver = QLabel("Milestone 5")
+        ver = QLabel("Milestone 6")
         ver.setAlignment(Qt.AlignCenter)
         ver.setStyleSheet("color: #2a2a2a; font-size: 10px; padding: 10px 0;")
         vbox.addWidget(ver)
@@ -277,6 +281,7 @@ class MainWindow(QMainWindow):
         self._apps_page.show_connecting()
         self._media_page.show_connecting()
         self._files_page.show_connecting()
+        self._backup_page.show_connecting()
 
         self._worker = _DeviceInfoWorker(udid, self._service)
         self._worker.finished.connect(self._on_info_received)
@@ -310,6 +315,7 @@ class MainWindow(QMainWindow):
             self._apps_page.show_device(info)
             self._media_page.show_device(info)
             self._files_page.show_device(info)
+            self._backup_page.show_device(info)
             self._update_tray_tooltip(info)
             self._log_msg(
                 f"Connected  {info.name}   {info.model}   iOS {info.ios_version}   "
@@ -326,6 +332,7 @@ class MainWindow(QMainWindow):
             self._apps_page.show_no_device()
             self._media_page.show_no_device()
             self._files_page.show_no_device()
+            self._backup_page.show_no_device()
             self._tray.set_tooltip("iPhone Storage Explorer\nNo device connected")
 
     def _on_disconnected(self) -> None:
@@ -337,6 +344,7 @@ class MainWindow(QMainWindow):
         self._apps_page.show_no_device()
         self._media_page.show_no_device()
         self._files_page.show_no_device()
+        self._backup_page.show_no_device()
         if self._last_connected_udid is not None:
             self._tray.show_message(
                 "iPhone disconnected",
