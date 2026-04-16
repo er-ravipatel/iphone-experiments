@@ -202,9 +202,8 @@ def create_app(argv: list[str]) -> QApplication:
     app.setApplicationVersion("1.0.0")
     app.setOrganizationName("iphone-experiments")
     asset_dir = Path(__file__).resolve().parents[2] / "assets"
-    write_icon_files(asset_dir)
-    ico_path = asset_dir / "app-icon.ico"
-    app_icon = QIcon(str(ico_path)) if ico_path.exists() else create_app_icon()
+    write_icon_files(asset_dir)          # keeps assets/ up-to-date for packaging
+    app_icon = create_app_icon()         # always use the in-memory multi-size icon
     app.setWindowIcon(app_icon)
     font = QFont("Segoe UI", 10)
     app.setFont(font)

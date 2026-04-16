@@ -3,9 +3,10 @@ Application icon generation for window, taskbar, and tray use.
 """
 from __future__ import annotations
 
+import io
 from pathlib import Path
 
-from PySide6.QtCore import QPointF, QRectF, Qt
+from PySide6.QtCore import QPointF, QRectF, Qt, QBuffer, QIODevice
 from PySide6.QtGui import QColor, QIcon, QLinearGradient, QPainter, QPainterPath, QPen, QPixmap
 
 
@@ -84,8 +85,30 @@ def create_app_icon() -> QIcon:
 
 def write_icon_files(root: Path) -> None:
     root.mkdir(parents=True, exist_ok=True)
-    icon = create_app_icon()
-    png_path = root / "app-icon.png"
     ico_path = root / "app-icon.ico"
-    icon.pixmap(256, 256).save(str(png_path), "PNG")
-    icon.pixmap(256, 256).save(str(ico_path), "ICO")
+    png_path = root / "app-icon.png"
+
+    # Save 256×256 PNG (used for shortcuts/packaging)
+    _render_icon(256).save(str(png_path), "PNG")
+
+    # Write a proper multi-resolution ICO using Pillow so Windows taskbar,
+    # Alt-Tab, and Explorer all pick up the right size (32 px is critical).
+    try:
+        from PIL import Image
+        sizes = (16, 24, 32, 48, 64, 128, 256)
+        pil_images: list[Image.Image] = []
+        for s in sizes:
+            buf = QBuffer()
+            buf.open(QIODevice.WriteOnly)
+            _render_icon(s).save(buf, "PNG")
+            buf.close()
+            pil_images.append(Image.open(io.BytesIO(bytes(buf.data()))))
+        pil_images[0].save(
+            str(ico_path),
+            format="ICO",
+            sizes=[(s, s) for s in sizes],
+            append_images=pil_images[1:],
+        )
+    except Exception:
+        # Pillow unavailable — fall back to single-frame ICO (better than nothing)
+        _render_icon(256).save(str(ico_path), "ICO")
