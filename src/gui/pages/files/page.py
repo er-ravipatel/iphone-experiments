@@ -233,15 +233,19 @@ class FilesPage(QWidget):
     def _on_breadcrumb_selected(self, path: str) -> None:
         if path == self._current_path:
             return
-        # Rebuild stack: all ancestors of *path*
+        # Rebuild the back-stack so Up works correctly after a breadcrumb jump.
+        # Stack must contain every ancestor of *path* in order: ["/", "/DCIM", …]
+        # Example: jumping to "/DCIM" → stack = ["/"]
+        #          jumping to "/DCIM/100APPLE" → stack = ["/", "/DCIM"]
         parts = [p for p in path.split("/") if p]
         self._path_stack = []
         built = "/"
-        for p in parts[:-1]:
+        for p in parts:   # iterate ALL parts, not parts[:-1]
             self._path_stack.append(built)
             built = str(PurePosixPath(built) / p)
         self._current_path = path
-        log.debug("FilesPage: breadcrumb jump → %s", self._current_path)
+        log.debug("FilesPage: breadcrumb jump → %s  (stack depth %d)",
+                  self._current_path, len(self._path_stack))
         self._list_current()
 
     # ── Action handlers ────────────────────────────────────────────────────
@@ -356,11 +360,20 @@ class FilesPage(QWidget):
             self._status_lbl.setText(f"Error: {msg}")
             QMessageBox.critical(self, "Operation Failed", msg)
 
-        # worker.finished may be Signal() or Signal(int) depending on worker type
-        worker.finished.connect(lambda *args: (on_done(*args), self._action_bar.hide_progress(), self._refresh_action_bar()))
+        # worker.finished may be Signal() [Delete/Rename/Mkdir] or Signal(int) [Download/Upload].
+        # Use *args so the same handler works for both arities.
+        def _on_done(*args) -> None:
+            on_done(*args)
+            self._action_bar.hide_progress()
+            self._refresh_action_bar()
+
+        def _discard_worker(*_args, _w=worker) -> None:
+            self._live_workers.discard(_w)
+
+        worker.finished.connect(_on_done)
         worker.failed.connect(_on_fail)
-        worker.finished.connect(lambda *_a, _w=worker: self._live_workers.discard(_w))
-        worker.failed.connect(lambda _m, _w=worker: self._live_workers.discard(_w))
+        worker.finished.connect(_discard_worker)
+        worker.failed.connect(lambda _msg, _w=worker: self._live_workers.discard(_w))
         worker.start()
 
     def _after_op(self, msg: str, *, refresh: bool) -> None:

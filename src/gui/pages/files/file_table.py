@@ -72,8 +72,13 @@ class FileTableWidget(QTableWidget):
         log.debug("FileTableWidget: loaded %d entries", len(sorted_entries))
 
     def clear_entries(self) -> None:
+        # Block signals while clearing so _on_selection_changed doesn't fire
+        # with an empty _entries list (QTableWidget emits itemSelectionChanged
+        # when rows are removed even if nothing was selected).
+        self.blockSignals(True)
         self._entries = []
         self.setRowCount(0)
+        self.blockSignals(False)
 
     def selected_entry(self) -> dict | None:
         """Return the currently selected entry dict, or None."""

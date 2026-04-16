@@ -8,21 +8,22 @@
 
 ## Agent Handoff Summary
 
-**Last session completed (2026-04-12):**
-- Extended `DeviceInfo` with 15+ new fields (IMEI, IMEI2, MEID, ICCID, phone number, board ID, chip ID, baseband, firmware, MLB serial, Find My lock, passcode status, developer mode, battery external/full states)
-- Full redesign of `DiagnosticsPage` — 3uTools-style layout with categorised info tables + coloured status cards
-- Live screenshot panel in Diagnostics (auto-refreshes every 4 s; gracefully degrades to "Requires Developer Mode" message when not available — `com.apple.mobile.screenshotr` is a developer service on iOS 16+)
-- `MediaPage` preview pane overhaul: resizable via QSplitter, pop-out floating window, full-resolution photo preview (downloads full file, falls back to thumbnail as placeholder), EXIF metadata display
-- Fixed periodic device poll resetting the media page: new `_on_refresh_info()` path updates only the header/dashboard every 15 s without touching media page state
-- `_PhotoPopout` floating window with Fit/Full-Size toggle and scroll panning
-- `_PhotoDecodeWorker` QThread for HEIC decode on background thread (safe QPixmap on main thread)
+**Last session completed (2026-04-16):**
+- **MediaPage SRP refactor** — `media_page.py` (1525 lines) decomposed into `src/gui/pages/media/` package (6 files, ~900 lines total)
+- **Milestone 5: Files page** — `src/gui/pages/files/` package with full AFC file browser
+- **Logging** — `iphone_desktop.log` written to the app folder; DEBUG level throughout; noisy libs silenced
+- **PopOut nav fixes** — arrow-key prev/next in `PhotoPopout`, `_live_workers` crash fix, focus policy fixes
+- **`media_page.py` deleted** — legacy file removed, new package is the active implementation
 
 **Previous sessions:**
-- Viewport-aware lazy thumbnail loading (visible items first, `_get_visible_rows()`)
-- Video preview with in-app `QMediaPlayer` playback
+- Extended `DeviceInfo` with 15+ new fields (IMEI, IMEI2, MEID, ICCID, phone number, board ID, chip ID, baseband, firmware, MLB serial, Find My lock, passcode status, developer mode, battery external/full states)
+- Full redesign of `DiagnosticsPage` — 3uTools-style layout with categorised info tables + coloured status cards
+- Live screenshot panel in Diagnostics (auto-refreshes every 4 s; gracefully degrades to "Requires Developer Mode" message when not available)
+- `MediaPage` preview pane: resizable via QSplitter, pop-out floating window, full-res photo preview, EXIF metadata display
+- Fixed periodic device poll resetting the media page: `_on_refresh_info()` path updates only header/dashboard every 15 s
+- Viewport-aware lazy thumbnail loading, video preview with in-app `QMediaPlayer`
 - `abort_all()` interface on every page, called by `MainWindow._navigate()`
-- QThread crash fixes: `_live_workers: set`, signal disconnect before replacement, no blocking `wait()` on main thread
-- Concurrent AFC stat calls in `_listdir` (semaphore of 8, ~8x speedup)
+- QThread crash fixes: `_live_workers: set`, signal disconnect before replacement
 
 ---
 
@@ -42,27 +43,86 @@ Entry point: `desktop.py` → `src/gui/main_window.py`
 - `MainWindow` hosts a sidebar nav, `QStackedWidget` for pages, and an activity log.
 - Device polling: `QTimer` every 2.5 s (cheap `idevice_id` call on main thread).
   - **New device / first connect** → `_on_connecting()` — full reset of all pages.
-  - **Same device, periodic tick (every 15 s)** → `_on_refresh_info()` — silently refreshes header + dashboard only. Media and Apps pages are NOT reset.
+  - **Same device, periodic tick (every 15 s)** → `_on_refresh_info()` — silently refreshes header + dashboard only. Other pages are NOT reset.
 - Device info fetching: `_DeviceInfoWorker(QThread)`.
 - **Every page exposes `abort_all()`** — called by `MainWindow._navigate()` before switching.
 
 ### Pages
 
-| Page | Index | File | Notes |
+| Page | Index | Module | Notes |
 |---|---|---|---|
 | Dashboard | 0 | `src/gui/pages/dashboard_page.py` | Battery/storage bars, connectivity cards |
 | Diagnostics | 1 | `src/gui/pages/diagnostics_page.py` | 3uTools-style — see below |
 | Screenshot | 2 | `src/gui/pages/screenshot_page.py` | Capture + preview |
 | Apps | 3 | `src/gui/pages/apps_page.py` | List/install/uninstall |
-| Photos & Videos | 4 | `src/gui/pages/media_page.py` | Full media browser — see below |
+| Photos & Videos | 4 | `src/gui/pages/media/` | SRP package — see below |
+| Files | 5 | `src/gui/pages/files/` | SRP package — see below |
 
 ### Threading Rules (critical — crashes if violated)
 
 1. **`QPixmap` only on main thread.** Workers emit `bytes` or `QImage`; slot calls `QPixmap.fromImage()`.
-2. **`_live_workers: set` on every page** with QThread workers. Add on `.start()`, remove on `finished`. Prevents Python GC destroying a running QThread.
-3. **Signal disconnect before worker replacement.** Call `_disconnect_list_worker()` before assigning a new `_ListDirWorker`.
+2. **`_live_workers: set` on every page** with QThread workers. Add before `.start()`, discard via `finished` signal callback. Prevents Python GC destroying a running QThread.
+3. **Signal disconnect before worker replacement.** Disconnect `finished`/`failed` before assigning a new worker. Park still-running workers in `_live_workers` with a `finished.connect(lambda _w=old: _live_workers.discard(_w))`.
 4. **No blocking `wait()` on main thread.** Call `worker.cancel()` + disconnect signals; thread finishes naturally, kept alive by `_live_workers`.
-5. **`QTimer.singleShot(0, fn)` from `threading.Thread` is unreliable.** Use a proper `QThread` with a `Signal` instead. (Lesson learned in photo preview work.)
+5. **`QTimer.singleShot(0, fn)` from `threading.Thread` is unreliable.** Use a proper `QThread` with a `Signal` instead.
+
+---
+
+## MediaPage — Photos & Videos
+
+**Package:** `src/gui/pages/media/`
+
+| File | Class | Responsibility |
+|---|---|---|
+| `__init__.py` | — | Re-exports `MediaPage` |
+| `_utils.py` | — | Constants (`THUMB_SIZE=155`, `ITEM_SIZE=162`) + pure helpers |
+| `workers.py` | 6 workers | `ListDirWorker`, `ThumbnailWorker`, `PhotoDecodeWorker`, `DownloadOpenWorker`, `ExportWorker`, `ScanWorker` |
+| `widgets.py` | `GripSplitter`, `PhotoPopout` | Custom splitter with grip dots; floating photo viewer with prev/next nav |
+| `preview_panel.py` | `PreviewPanel` | Photo/video preview, EXIF metadata, pop-out |
+| `page.py` | `MediaPage` | Orchestrator — wires everything via signals |
+
+### Key behaviours
+
+- **Thumbnail grid**: `ITEM_SIZE=162`, `setSpacing(2)` — tight layout. Folders first, lazy-loaded.
+- **MEDIA section label**: auto-hides when grid panel < 120 px wide (via `_on_splitter_moved`).
+- **Arrow-key debounce**: `eventFilter` on grid intercepts arrow keys → `QTimer(400ms, singleShot=True)`. Preview loads only after 400 ms pause.
+- **Preview**: cleared on folder switch; pop-out (`PhotoPopout`) supports arrow-key prev/next navigation across photos.
+- **`PhotoPopout._live_workers`**: critical — keeps running `PhotoDecodeWorker` refs alive when navigating quickly. Without this, Python GC destroys the running thread → app crash.
+
+---
+
+## FilesPage — AFC File Browser
+
+**Package:** `src/gui/pages/files/`
+
+| File | Class | Responsibility |
+|---|---|---|
+| `__init__.py` | — | Re-exports `FilesPage` |
+| `workers.py` | 6 workers | `ListDirWorker`, `DownloadWorker`, `UploadWorker`, `DeleteWorker`, `RenameWorker`, `MkdirWorker` |
+| `breadcrumb.py` | `BreadcrumbBar` | Reusable clickable path bar — emits `path_selected(str)` |
+| `file_table.py` | `FileTableWidget` | Reusable sortable table (folders first) — emits `entry_activated(dict)`, `selection_changed(object)` |
+| `action_bar.py` | `ActionBar` | Upload/Download/Delete/Rename/New Folder buttons + progress. Driven entirely by `set_state()` — zero business logic inside. |
+| `page.py` | `FilesPage` | Thin orchestrator — wires components via signals, manages workers |
+
+### Design patterns
+
+- **Single Responsibility**: each class has exactly one job
+- **Observer**: siblings never call each other directly; all cross-component messages flow through signals
+- **Facade**: `FilesPage` is the only public surface; internals are hidden
+- **Template Method**: every worker implements only `run()`
+
+### Key behaviours
+
+- Root starts at `/` — user can navigate the full AFC filesystem
+- Double-click folder → navigate in; double-click file → download prompt
+- Breadcrumb segments are clickable — jump to any ancestor (back-stack rebuilt correctly)
+- `ActionBar.set_state()` disables buttons during transfers so no double-ops
+- `blockSignals(True/False)` around `clear_entries()` prevents spurious selection callbacks
+
+### Known limitations
+
+- AFC only exposes user-accessible paths (Documents, DCIM, Media, etc.) — system paths are locked
+- Download loads full file into RAM before writing; no streaming for large files
 
 ---
 
@@ -72,107 +132,23 @@ Entry point: `desktop.py` → `src/gui/main_window.py`
 
 ### Layout
 - **Left column** (scrollable): 4 categorised `QTableWidget`s
-  - `_tbl_identity` — Device Identity (name, model, product type, model number, hardware model, iOS, build, serial, UDID, IMEI, IMEI2, MEID, ICCID, phone number, region, color)
+  - `_tbl_identity` — Device Identity (name, model, product type, iOS, build, serial, UDID, IMEI, IMEI2, MEID, ICCID, phone number, region, color)
   - `_tbl_hardware` — Hardware (CPU arch, platform, board ID, chip ID as hex, die ID, baseband version, firmware, MLB serial)
   - `_tbl_connectivity` — Connectivity (WiFi, Bluetooth, Ethernet MAC)
   - `_tbl_battery` — Battery & Storage (level, charge status, plugged in, total/used/free)
 - **Right column**: 5 `_StatusCard` widgets with green ✓ / red ✗ / grey ? dot indicators
   - Activation State, iCloud Lock, Find My, Passcode, Developer Mode
 - **Right column bottom**: Live screenshot panel (`_ScreenshotWorker`)
-  - Auto-starts when page is shown, stops when hidden (via `showEvent`/`hideEvent`)
-  - Stops retrying on `InvalidServiceError` — shows "Requires Developer Mode" message
+  - Auto-starts when page is shown, stops when hidden
+  - Stops retrying on `InvalidServiceError` — shows "Requires Developer Mode"
   - Refreshes every 4 s when developer mode is enabled
-
-### DeviceInfo — new fields (all from `ideviceinfo` default domain, no developer mode needed)
-
-| Field | Source key | Notes |
-|---|---|---|
-| `imei` | `InternationalMobileEquipmentIdentity` | |
-| `imei2` | `InternationalMobileEquipmentIdentity2` | dual-SIM |
-| `meid` | `MobileEquipmentIdentifier` | |
-| `iccid` | `IntegratedCircuitCardIdentity` | SIM card |
-| `phone_number` | `PhoneNumber` | |
-| `model_number` | `ModelNumber` | SKU, e.g. "MGMN3" |
-| `hardware_model` | `HardwareModel` | e.g. "D53pAP" |
-| `hardware_platform` | `HardwarePlatform` | e.g. "t8101" |
-| `board_id` | `BoardId` | |
-| `chip_id` | `ChipID` | shown as hex via `chip_id_hex` property |
-| `die_id` | `DieID` | |
-| `baseband_version` | `BasebandVersion` | |
-| `firmware_version` | `FirmwareVersion` | |
-| `mlb_serial` | `MLBSerialNumber` | motherboard serial |
-| `ethernet_address` | `EthernetAddress` | |
-| `find_my_locked` | `NonVolatileRAM.fm-activation-locked` | base64-decoded "YES"/"NO" |
-| `password_protected` | `PasswordProtected` | |
-| `battery_external_connected` | `ExternalConnected` (battery domain) | |
-| `battery_fully_charged` | `FullyCharged` (battery domain) | |
-| `developer_mode` | `com.apple.security.mac.amfi → DeveloperModeStatus` | via pymobiledevice3 |
-
-**Screenshot service constraint:** `com.apple.mobile.screenshotr` is a developer service on iOS 16+. Both `idevicescreenshot` (libimobiledevice) and pymobiledevice3 confirm `InvalidService` without developer mode. No workaround exists at the Apple protocol level.
-
----
-
-## MediaPage — Photos & Videos
-
-**File:** `src/gui/pages/media_page.py` (1 525 lines — refactor planned, see below)
-
-### Layout (current)
-- **Top bar**: title + summary label + Export Selected / Export All / Export All Subfolders buttons + status label — lives above the splitter so buttons never compress on drag
-- **Body**: `QSplitter` → left folder list (200 px fixed) | `_GripSplitter` → MEDIA grid | PREVIEW panel
-
-### Splitter / drag
-- `_GripSplitter` / `_GripSplitterHandle`: custom `QSplitter` subclass — paints 3 grip dots on handle, turns blue on hover. Handle width 10 px.
-- Grid panel min-width 0 (free to shrink). "MEDIA" section label auto-hides via `_on_splitter_moved` when grid panel < 120 px.
-- Preview panel min-width 180 px; width remembered in `_preview_panel_width` across hide/show.
-
-### Thumbnail grid
-- `ITEM_SIZE = 162`, `THUMB_SIZE = 155`, `setSpacing(2)` — tight grid with minimal gaps between thumbnails.
-- Section labels: FOLDERS / MEDIA / PREVIEW — all use `SectionLabel` object name for consistent style.
-
-### Preview pane
-- Hidden by default; shown on file selection; **cleared on folder switch** (`_clear_preview()` called in `_on_folder_clicked`, `_on_folder_dbl`, `_on_back`).
-- **Arrow-key debounce**: `eventFilter` on `self._grid` intercepts arrow keys → restarts `_preview_debounce` (`QTimer`, 400 ms single-shot). Preview only loads after 400 ms of inactivity — rapid arrow-key scrolling does not trigger loads.
-- **Resizable**: `_inner_splitter` splitter; panel width remembered.
-- **Pop-out**: `_PhotoPopout(QWidget, Qt.Window)` — Fit/Full-Size toggle, scroll panning.
-- **Photo preview** (stack index 2): full-resolution; JPEG/PNG via `QImage` on main thread; HEIC via `_PhotoDecodeWorker(QThread)`; placeholder thumbnail while downloading.
-- **Video preview** (stack index 1): `QMediaPlayer` + `QVideoWidget`, auto-play on click.
-- EXIF metadata (dimensions, date taken) via background `threading.Thread`.
-
-### Pending refactor — SRP decomposition (planned, not started)
-Current `media_page.py` is 1 525 lines with mixed responsibilities. Planned split:
-
-```
-src/gui/pages/media/
-    __init__.py          ← re-exports MediaPage (no breaking change to callers)
-    page.py              ← MediaPage orchestrator only (~150 lines)
-    workers.py           ← all QThread workers (_ListDirWorker, _ThumbnailWorker, etc.)
-    preview_panel.py     ← PreviewPanel widget (photo + video + debounce + pop-out)
-    thumbnail_grid.py    ← ThumbnailGrid widget (folder list + grid + lazy loading)
-    export_controller.py ← ExportController (scan + export + progress callbacks)
-    widgets.py           ← _GripSplitter, _GripSplitterHandle, _PhotoPopout
-```
-
-Signal contracts:
-- `ThumbnailGrid.file_selected(file_dict, row)` → `PreviewPanel.load(file, row)`
-- `ThumbnailGrid.folder_changed()` → `PreviewPanel.clear()`
-- `ThumbnailGrid.selection_changed(items)` → `ExportController.set_selection(items)`
-- `ExportController.progress/done/failed` → `MediaPage` (updates progress bar)
-
-**Migration order** (each step leaves app runnable):
-1. Create `media/` package, move file → `media/page.py`, add `__init__.py` shim
-2. Extract `workers.py`
-3. Extract `widgets.py`
-4. Extract `preview_panel.py`
-5. Extract `thumbnail_grid.py`
-6. Extract `export_controller.py`
-7. Slim `page.py` to orchestrator
 
 ---
 
 ## DeviceInfo (`src/device/info.py`)
 
-- `find_my_locked`: parsed from `NonVolatileRAM` multiline block in `ideviceinfo` output. The block contains `fm-activation-locked: <base64>` where base64 decodes to "YES" or "NO".
-- `chip_id_hex`: computed property — converts decimal chip ID string to `0xXXXX` hex format.
+- `find_my_locked`: parsed from `NonVolatileRAM` multiline block; base64-decoded "YES"/"NO".
+- `chip_id_hex`: computed property — converts decimal chip ID to `0xXXXX` hex.
 - `icloud_locked`: computed property — True if `activation_state` is not "Activated".
 - NVRAM parsing: `_parse_nvram()` walks raw text looking for indented lines after `NonVolatileRAM:` header.
 
@@ -190,15 +166,21 @@ Signal contracts:
 
 | Milestone | Page | Notes |
 |---|---|---|
-| 5 | Files | AFC file browser — upload / download / delete / rename |
 | 6 | Backup & Restore | streaming output, progress bar, restore confirmation |
-| 7 | Screen Mirror | port tkinter scaffold to PySide6 + live stream (needs dev mode) |
+| 7 | Screen Mirror | PySide6 port + live stream (needs dev mode on iOS 16+) |
 
 **Other open items:**
-- **MediaPage SRP refactor** — decompose `media_page.py` into `src/gui/pages/media/` package (see MediaPage section above for full plan)
-- Video thumbnail improvement: extract frame without downloading full file (partial download or on-device frame extraction)
+- Video thumbnail improvement: extract frame without downloading full file
 - Suppress OpenCV ffmpeg stderr noise when extracting video frames
 - Package desktop app as standalone Windows `.exe`
+
+---
+
+## Logging
+
+- Log file: `c:\Workspace\Personal\iphone-experiments\iphone_desktop.log`
+- Level: DEBUG throughout; asyncio, pymobiledevice3, urllib3 silenced to WARNING
+- Tail: `Get-Content .\iphone_desktop.log -Wait -Tail 50`
 
 ---
 
@@ -207,7 +189,7 @@ Signal contracts:
 ```
 iphone-experiments/
   main.py              ← terminal entry point
-  desktop.py           ← GUI entry point
+  desktop.py           ← GUI entry point (logging setup here)
   requirements.txt
   assets/              ← app icons (svg/png/ico)
   src/
@@ -215,24 +197,26 @@ iphone-experiments/
       app.py           ← QApplication factory + dark stylesheet
       icon.py          ← icon generator
       tray.py          ← system tray manager
-      main_window.py
+      main_window.py   ← sidebar nav, QStackedWidget, device polling
       pages/
         dashboard_page.py
-        diagnostics_page.py   ← 3uTools-style, updated this session
+        diagnostics_page.py
         screenshot_page.py
         apps_page.py
-        media_page.py         ← full media browser, updated this session
+        media/         ← SRP package (6 files)
+          __init__.py, _utils.py, workers.py, widgets.py, preview_panel.py, page.py
+        files/         ← SRP package (6 files)
+          __init__.py, workers.py, breadcrumb.py, file_table.py, action_bar.py, page.py
       widgets/
         device_header.py
     device/
       detector.py      ← idevice_id wrapper
-      info.py          ← DeviceInfo dataclass + fetcher, extended this session
+      info.py          ← DeviceInfo dataclass + fetcher
     terminal/
-      features/        ← shared feature modules (media, apps, backup, etc.)
+      features/        ← shared feature modules (media, apps, backup, files, etc.)
     utils/
       platform.py
       runner.py
-  scripts/debug/
 ```
 
 ## Branch Strategy
