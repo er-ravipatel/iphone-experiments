@@ -1,14 +1,21 @@
 """
-FilesPage — AFC file browser orchestrator.
+FilesPage — AFC file browser + "On My iPhone" app-document browser.
 
-Composes BreadcrumbBar + FileTableWidget + ActionBar and manages workers.
-Contains no rendering logic — delegates everything to its child components.
+Navigation domains
+------------------
+"root"         Virtual root: shows [📁 Media] + per-app document folders.
+               Entry point whenever the device connects / page resets.
+"afc"          Standard AFC tree (/DCIM, /Downloads, …).
+               Entered by double-clicking the Media folder from root.
+"house_arrest" Per-app Documents tree via HouseArrestService.
+               Entered by double-clicking an app folder from root.
 
-States driven by MainWindow:
-  show_no_device()
-  show_connecting()
-  show_device(info)
-  abort_all()
+Breadcrumb root label changes with domain:
+  root          → "📱 <device name>"
+  afc           → "📁 Media"
+  house_arrest  → "📱 <app display name>"
+
+Up from the top of any domain always returns to the virtual root.
 """
 from __future__ import annotations
 
@@ -16,7 +23,7 @@ import logging
 from pathlib import Path, PurePosixPath
 
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel,
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QFileDialog, QInputDialog, QMessageBox,
 )
 from PySide6.QtCore import Qt
@@ -26,7 +33,8 @@ from .breadcrumb import BreadcrumbBar
 from .file_table import FileTableWidget
 from .action_bar import ActionBar
 from .workers import (
-    ListDirWorker, DownloadWorker, UploadWorker,
+    ListDirWorker, ListAppsWorker,
+    DownloadWorker, UploadWorker,
     DeleteWorker, RenameWorker, MkdirWorker,
 )
 
@@ -40,6 +48,7 @@ class FilesPage(QWidget):
     Responsibilities
     ----------------
     - Own the page-level state machine (no_device / connecting / ready)
+    - Track the current navigation domain (root / afc / house_arrest)
     - Spawn and park background workers
     - React to child-component signals and issue commands back
 
@@ -49,12 +58,19 @@ class FilesPage(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._udid: str | None = None
-        self._current_path = "/"
+        self._device_name: str = ""
+
+        # Navigation state
+        self._domain: str = "root"          # "root" | "afc" | "house_arrest"
+        self._current_path: str = "/"
         self._path_stack: list[str] = []
+        self._app_bundle_id: str | None = None
+        self._app_display_name: str | None = None
+
         self._live_workers: set = set()
 
         # Active workers (one slot each)
-        self._list_worker:  ListDirWorker  | None = None
+        self._list_worker:  ListDirWorker | ListAppsWorker | None = None
         self._down_worker:  DownloadWorker | None = None
         self._up_worker:    UploadWorker   | None = None
         self._del_worker:   DeleteWorker   | None = None
@@ -89,7 +105,6 @@ class FilesPage(QWidget):
         self._crumb.path_selected.connect(self._on_breadcrumb_selected)
         nav_row.addWidget(self._crumb, stretch=1)
 
-        from PySide6.QtWidgets import QPushButton
         self._up_btn = QPushButton("⬆  Up")
         self._up_btn.setFixedHeight(32)
         self._up_btn.setMinimumWidth(80)
@@ -124,6 +139,8 @@ class FilesPage(QWidget):
         log.debug("FilesPage: show_no_device")
         self.abort_all()
         self._udid = None
+        self._device_name = ""
+        self._reset_to_root()
         self._file_table.clear_entries()
         self._status_lbl.setText("No device connected")
         self._crumb.set_root_label("📱 iPhone")
@@ -135,6 +152,8 @@ class FilesPage(QWidget):
         log.debug("FilesPage: show_connecting")
         self.abort_all()
         self._udid = None
+        self._device_name = ""
+        self._reset_to_root()
         self._file_table.clear_entries()
         self._status_lbl.setText("Connecting…")
         self._crumb.set_root_label("📱 iPhone")
@@ -146,8 +165,8 @@ class FilesPage(QWidget):
         if self._udid == info.udid:
             return   # same device, keep current browsing state
         self._udid = info.udid
-        self._current_path = "/"
-        self._path_stack = []
+        self._device_name = info.name
+        self._reset_to_root()
         self._status_lbl.setText(info.name)
         self._crumb.set_root_label(f"📱 {info.name}")
         self._list_current()
@@ -170,16 +189,29 @@ class FilesPage(QWidget):
         self._del_worker = self._ren_worker = self._mkdir_worker = None
         self._action_bar.hide_progress()
 
+    # ── Domain helpers ─────────────────────────────────────────────────────
+
+    def _reset_to_root(self) -> None:
+        self._domain = "root"
+        self._current_path = "/"
+        self._path_stack = []
+        self._app_bundle_id = None
+        self._app_display_name = None
+
+    def _current_bundle_id(self) -> str | None:
+        """Return the bundle_id for workers when in house_arrest domain, else None."""
+        return self._app_bundle_id if self._domain == "house_arrest" else None
+
     # ── Directory listing ──────────────────────────────────────────────────
 
     def _list_current(self) -> None:
         if not self._udid:
             return
-        log.debug("FilesPage: listing %s", self._current_path)
+        log.debug("FilesPage: listing domain=%s path=%s", self._domain, self._current_path)
         self._file_table.clear_entries()
         self._action_bar.show_progress("Listing…")
         self._crumb.set_path(self._current_path)
-        self._up_btn.setEnabled(self._current_path != "/")
+        self._up_btn.setEnabled(self._domain != "root" or bool(self._path_stack))
         self._refresh_action_bar()
 
         # Park any existing list worker before replacing
@@ -193,7 +225,12 @@ class FilesPage(QWidget):
                 pass
             old.finished.connect(lambda _w=old: self._live_workers.discard(_w))
 
-        w = ListDirWorker(self._udid, self._current_path)
+        if self._domain == "root":
+            w: QWidget = ListAppsWorker(self._udid)
+        else:
+            w = ListDirWorker(self._udid, self._current_path,
+                              bundle_id=self._current_bundle_id())
+
         self._list_worker = w
         self._live_workers.add(w)
         w.finished.connect(self._on_list_done)
@@ -206,12 +243,17 @@ class FilesPage(QWidget):
         log.debug("FilesPage: list done — %d entries", len(entries))
         self._action_bar.hide_progress()
         self._file_table.load_entries(entries)
-        dirs  = sum(1 for e in entries if e["is_dir"])
-        files = sum(1 for e in entries if not e["is_dir"])
-        self._status_lbl.setText(
-            f"{dirs} folder{'s' if dirs != 1 else ''}  ·  "
-            f"{files} file{'s' if files != 1 else ''}"
-        )
+        if self._domain == "root":
+            self._status_lbl.setText(
+                f"{len(entries) - 1} app{'s' if len(entries) != 2 else ''}  ·  Media"
+            )
+        else:
+            dirs  = sum(1 for e in entries if e["is_dir"])
+            files = sum(1 for e in entries if not e["is_dir"])
+            self._status_lbl.setText(
+                f"{dirs} folder{'s' if dirs != 1 else ''}  ·  "
+                f"{files} file{'s' if files != 1 else ''}"
+            )
         self._refresh_action_bar()
 
     def _on_list_failed(self, msg: str) -> None:
@@ -223,6 +265,32 @@ class FilesPage(QWidget):
     # ── Navigation ─────────────────────────────────────────────────────────
 
     def _on_entry_activated(self, entry: dict) -> None:
+        # ── Virtual-root sentinels ─────────────────────────────────────────
+        if entry.get("_is_media_entry"):
+            log.debug("FilesPage: entering AFC domain")
+            self._domain = "afc"
+            self._current_path = "/"
+            self._path_stack = []
+            self._app_bundle_id = None
+            self._app_display_name = None
+            self._crumb.set_root_label("📁  Media")
+            self._list_current()
+            return
+
+        if entry.get("_is_app_entry"):
+            bundle_id = entry["_bundle_id"]
+            display   = entry["name"]
+            log.debug("FilesPage: entering house_arrest domain for %s", bundle_id)
+            self._domain = "house_arrest"
+            self._current_path = "/"
+            self._path_stack = []
+            self._app_bundle_id = bundle_id
+            self._app_display_name = display
+            self._crumb.set_root_label(f"📱  {display}")
+            self._list_current()
+            return
+
+        # ── Regular navigation ─────────────────────────────────────────────
         if entry["is_dir"]:
             self._path_stack.append(self._current_path)
             self._current_path = entry["path"]
@@ -232,6 +300,15 @@ class FilesPage(QWidget):
             self._on_download()
 
     def _go_up(self) -> None:
+        # At the top of a non-root domain → back to virtual root
+        if self._domain in ("afc", "house_arrest") and not self._path_stack:
+            log.debug("FilesPage: back to virtual root from domain=%s", self._domain)
+            self._reset_to_root()
+            root_label = f"📱 {self._device_name}" if self._device_name else "📱 iPhone"
+            self._crumb.set_root_label(root_label)
+            self._list_current()
+            return
+
         if self._path_stack:
             self._current_path = self._path_stack.pop()
         else:
@@ -244,13 +321,10 @@ class FilesPage(QWidget):
         if path == self._current_path:
             return
         # Rebuild the back-stack so Up works correctly after a breadcrumb jump.
-        # Stack must contain every ancestor of *path* in order: ["/", "/DCIM", …]
-        # Example: jumping to "/DCIM" → stack = ["/"]
-        #          jumping to "/DCIM/100APPLE" → stack = ["/", "/DCIM"]
         parts = [p for p in path.split("/") if p]
         self._path_stack = []
         built = "/"
-        for p in parts:   # iterate ALL parts, not parts[:-1]
+        for p in parts:
             self._path_stack.append(built)
             built = str(PurePosixPath(built) / p)
         self._current_path = path
@@ -261,7 +335,7 @@ class FilesPage(QWidget):
     # ── Action handlers ────────────────────────────────────────────────────
 
     def _on_upload(self) -> None:
-        if not self._udid:
+        if not self._udid or self._domain == "root":
             return
         local, _ = QFileDialog.getOpenFileName(self, "Choose file to upload")
         if not local:
@@ -270,7 +344,8 @@ class FilesPage(QWidget):
         remote = str(PurePosixPath(self._current_path) / name)
         log.debug("FilesPage: upload %s → %s", local, remote)
         self._start_transfer(
-            UploadWorker(self._udid, local, remote),
+            UploadWorker(self._udid, local, remote,
+                         bundle_id=self._current_bundle_id()),
             slot="up_worker",
             label=f"Uploading {name}…",
             on_done=lambda n: self._after_op(f"Uploaded {_fmt_size(n)}", refresh=True),
@@ -278,14 +353,15 @@ class FilesPage(QWidget):
 
     def _on_download(self) -> None:
         entry = self._file_table.selected_entry()
-        if not entry or entry["is_dir"] or not self._udid:
+        if not entry or entry["is_dir"] or not self._udid or self._domain == "root":
             return
         dest, _ = QFileDialog.getSaveFileName(self, "Save file as", entry["name"])
         if not dest:
             return
         log.debug("FilesPage: download %s → %s", entry["path"], dest)
         self._start_transfer(
-            DownloadWorker(self._udid, entry["path"], dest),
+            DownloadWorker(self._udid, entry["path"], dest,
+                           bundle_id=self._current_bundle_id()),
             slot="down_worker",
             label=f"Downloading {entry['name']}…",
             on_done=lambda n: self._after_op(f"Downloaded {_fmt_size(n)}", refresh=False),
@@ -293,7 +369,7 @@ class FilesPage(QWidget):
 
     def _on_delete(self) -> None:
         entry = self._file_table.selected_entry()
-        if not entry or not self._udid:
+        if not entry or not self._udid or self._domain == "root":
             return
         kind = "folder" if entry["is_dir"] else "file"
         if QMessageBox.question(
@@ -305,7 +381,8 @@ class FilesPage(QWidget):
             return
         log.debug("FilesPage: delete %s", entry["path"])
         self._start_transfer(
-            DeleteWorker(self._udid, entry["path"]),
+            DeleteWorker(self._udid, entry["path"],
+                         bundle_id=self._current_bundle_id()),
             slot="del_worker",
             label=f"Deleting {entry['name']}…",
             on_done=lambda: self._after_op("Deleted successfully", refresh=True),
@@ -313,7 +390,7 @@ class FilesPage(QWidget):
 
     def _on_rename(self) -> None:
         entry = self._file_table.selected_entry()
-        if not entry or not self._udid:
+        if not entry or not self._udid or self._domain == "root":
             return
         new_name, ok = QInputDialog.getText(
             self, "Rename", "New name:", text=entry["name"]
@@ -324,14 +401,15 @@ class FilesPage(QWidget):
         dst = str(PurePosixPath(self._current_path) / new_name)
         log.debug("FilesPage: rename %s → %s", entry["path"], dst)
         self._start_transfer(
-            RenameWorker(self._udid, entry["path"], dst),
+            RenameWorker(self._udid, entry["path"], dst,
+                         bundle_id=self._current_bundle_id()),
             slot="ren_worker",
             label=f"Renaming to {new_name}…",
             on_done=lambda: self._after_op("Renamed successfully", refresh=True),
         )
 
     def _on_mkdir(self) -> None:
-        if not self._udid:
+        if not self._udid or self._domain == "root":
             return
         name, ok = QInputDialog.getText(self, "New Folder", "Folder name:")
         if not ok or not name.strip():
@@ -339,7 +417,8 @@ class FilesPage(QWidget):
         path = str(PurePosixPath(self._current_path) / name.strip())
         log.debug("FilesPage: mkdir %s", path)
         self._start_transfer(
-            MkdirWorker(self._udid, path),
+            MkdirWorker(self._udid, path,
+                        bundle_id=self._current_bundle_id()),
             slot="mkdir_worker",
             label=f"Creating {name}…",
             on_done=lambda: self._after_op("Folder created", refresh=True),
@@ -348,16 +427,6 @@ class FilesPage(QWidget):
     # ── Transfer helper (DRY) ──────────────────────────────────────────────
 
     def _start_transfer(self, worker, *, slot: str, label: str, on_done) -> None:
-        """
-        Generic helper to start any single-slot transfer worker.
-
-        Parameters
-        ----------
-        worker  : the QThread worker to start
-        slot    : name of the instance attribute that holds this worker type
-        label   : progress bar text
-        on_done : callable connected to worker.finished
-        """
         setattr(self, f"_{slot}", worker)
         self._live_workers.add(worker)
         self._action_bar.show_progress(label)
@@ -370,8 +439,6 @@ class FilesPage(QWidget):
             self._status_lbl.setText(f"Error: {msg}")
             QMessageBox.critical(self, "Operation Failed", msg)
 
-        # worker.finished may be Signal() [Delete/Rename/Mkdir] or Signal(int) [Download/Upload].
-        # Use *args so the same handler works for both arities.
         def _on_done(*args) -> None:
             on_done(*args)
             self._action_bar.hide_progress()
@@ -399,14 +466,21 @@ class FilesPage(QWidget):
     def _refresh_action_bar(self) -> None:
         entry      = self._file_table.selected_entry()
         has_device = self._udid is not None
-        has_any    = entry is not None
+        # Disable file operations when at the virtual root (no real FS behind it)
+        in_fs      = self._domain != "root"
+        has_any    = entry is not None and not entry.get("_is_media_entry") \
+                     and not entry.get("_is_app_entry")
         has_file   = has_any and not entry["is_dir"]
         busy       = self._is_busy()
         self._action_bar.set_state(
-            has_device=has_device,
+            has_device=has_device and in_fs,
             has_file_sel=has_file,
             has_any_sel=has_any,
             busy=busy,
+        )
+        # Up button: disabled at root domain (nothing above)
+        self._up_btn.setEnabled(
+            has_device and (self._domain != "root" or bool(self._path_stack))
         )
 
     def _is_busy(self) -> bool:

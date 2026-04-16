@@ -22,6 +22,7 @@ from PySide6.QtCore import Qt, QTimer, QThread, Signal, QSize
 from PySide6.QtGui import QColor, QFont, QPixmap, QImage
 
 from ...device.info import DeviceInfo
+from ..settings import screenshot_interval_ms as _screenshot_interval_ms
 
 
 # ── Screenshot worker ──────────────────────────────────────────────────────────
@@ -343,9 +344,13 @@ class DiagnosticsPage(QWidget):
     def _start_auto_screenshot(self) -> None:
         if self._shot_timer:
             return
+        interval_ms = _screenshot_interval_ms()
+        if interval_ms == 0:
+            # User disabled auto-screenshot — manual Capture button still works
+            return
         self._shot_timer = QTimer(self)
         self._shot_timer.timeout.connect(self._capture_screenshot)
-        self._shot_timer.start(4000)
+        self._shot_timer.start(interval_ms)
         self._capture_screenshot()   # immediate first shot
 
     def _stop_auto_screenshot(self) -> None:

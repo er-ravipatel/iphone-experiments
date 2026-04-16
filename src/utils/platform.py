@@ -21,11 +21,25 @@ def find_tool(name: str) -> str | None:
     """
     Locate a libimobiledevice CLI tool binary.
     Checks:
+      0. User-configured override directory (Settings page → Tools)
       1. PATH (works after brew install / apt install)
       2. vendor/ directory bundled alongside this project
     Returns the full path string, or None if not found.
     """
-    # Check PATH first
+    # 0. User-configured override (set via Settings page)
+    #    Wrapped in try/except so this is safe in terminal mode where no
+    #    QApplication exists and settings.tools_path() would fail.
+    try:
+        from ..gui.settings import tools_path as _tools_path
+        override = _tools_path()
+        if override:
+            for c in [Path(override) / name, Path(override) / f"{name}.exe"]:
+                if c.exists():
+                    return str(c)
+    except Exception:
+        pass
+
+    # 1. Check PATH first
     found = shutil.which(name)
     if found:
         return found

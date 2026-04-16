@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt
 
 from ....device.info import DeviceInfo
+from ... import settings
 from ..media._utils import open_system
 from ..media.widgets import GripSplitter
 from .backup_table import BackupTableWidget
@@ -28,7 +29,6 @@ from .output_log import OutputLog
 from .action_bar import ActionBar
 from .workers import (
     ListBackupsWorker, BackupWorker, RestoreWorker, DeleteBackupWorker,
-    _DEFAULT_BACKUP_DIR,
 )
 
 log = logging.getLogger(__name__)
@@ -50,7 +50,7 @@ class BackupRestorePage(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._udid: str | None = None
-        self._backup_dir: str  = _DEFAULT_BACKUP_DIR
+        self._backup_dir: str  = settings.backup_dir()
         self._live_workers: set = set()
 
         self._list_worker:    ListBackupsWorker  | None = None
@@ -113,6 +113,7 @@ class BackupRestorePage(QWidget):
         log.debug("BackupRestorePage: show_no_device")
         self.abort_all()
         self._udid = None
+        self._backup_dir = settings.backup_dir()   # pick up any settings change
         self._status_lbl.setText("No device connected")
         self._load_backups()   # backups are filesystem-only — still show them
         self._refresh_action_bar()
@@ -127,6 +128,7 @@ class BackupRestorePage(QWidget):
     def show_device(self, info: DeviceInfo) -> None:
         log.debug("BackupRestorePage: show_device udid=%s", info.udid)
         self._udid = info.udid
+        self._backup_dir = settings.backup_dir()   # pick up any settings change
         self._status_lbl.setText(f"Connected: {info.name}")
         self._load_backups()
         self._refresh_action_bar()
