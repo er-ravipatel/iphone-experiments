@@ -3,10 +3,16 @@
 ## Active Workspace
 
 - Current working repo path: `C:\Workspace\Personal\iphone-experiments`
-- Current active branch: `feature-desktop-ui`
+- Current active branch: `feature-troubleshoot-page`
 - This repo is the source of truth for ongoing work.
 
 ## Agent Handoff Summary
+
+**Current troubleshooting session (2026-04-16):**
+- The desktop app direction is now explicitly a USB-based iPhone troubleshooting and recovery tool
+- `TroubleshootPage` is being added near the top of the sidebar as a new diagnosis-focused page
+- `TroubleshootService` is the reusable logic layer for snapshots, issue detection, health summaries, and recommended actions
+- Current MVP issue coverage: no device, blocked device info / likely trust-unlock required, low storage, backup risk, developer mode off, screenshot readiness, mirror readiness, and missing critical tools
 
 **Last session completed (2026-04-16):**
 - **MediaPage SRP refactor** — `media_page.py` (1525 lines) decomposed into `src/gui/pages/media/` package (6 files)
@@ -35,6 +41,7 @@
 
 PySide6 desktop GUI (`desktop.py`) is the primary active development surface.
 Terminal CLI (`main.py`) is feature-complete.
+The desktop product vision is a USB-based iPhone troubleshooting and recovery app that highlights what is wrong, why it is happening, and the next safe action.
 
 ---
 
@@ -49,6 +56,7 @@ Entry point: `desktop.py` → `src/gui/main_window.py`
   - **New device / first connect** → `_on_connecting()` — full reset of all pages.
   - **Same device, periodic tick (every 15 s)** → `_on_refresh_info()` — silently refreshes header + dashboard only.
 - Device info fetching: `_DeviceInfoWorker(QThread)`.
+- Sidebar now includes `Troubleshoot` near the top. It is intended to become the flagship diagnosis surface for the desktop app.
 - **Every page exposes `abort_all()`** — called by `MainWindow._navigate()` before switching.
 
 ### Pages

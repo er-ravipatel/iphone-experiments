@@ -14,7 +14,6 @@ from PySide6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
     QStackedWidget, QLabel, QPushButton, QFrame, QPlainTextEdit,
     QSystemTrayIcon,
-    QSizePolicy,
 )
 from PySide6.QtCore import Qt, QTimer, QThread, Signal
 
@@ -24,6 +23,7 @@ from ..services.device_service import DeviceService
 from .tray import AppTray
 from .widgets.device_header import DeviceHeader
 from .pages.dashboard_page import DashboardPage
+from .pages.troubleshoot_page import TroubleshootPage
 from .pages.diagnostics_page import DiagnosticsPage
 from .pages.screenshot_page import ScreenshotPage
 from .pages.apps_page import AppsPage
@@ -52,18 +52,20 @@ class _DeviceInfoWorker(QThread):
 # ── Navigation constants ───────────────────────────────────────────────────────
 
 _PAGE_DASHBOARD   = 0
-_PAGE_DIAGNOSTICS = 1
-_PAGE_SCREENSHOT  = 2
-_PAGE_APPS        = 3
-_PAGE_MEDIA       = 4
-_PAGE_FILES       = 5
-_PAGE_BACKUP      = 6
-# index 7 reserved for Screen Mirror (placeholder widget in stack)
-_PAGE_SETTINGS    = 8
+_PAGE_TROUBLESHOOT = 1
+_PAGE_DIAGNOSTICS = 2
+_PAGE_SCREENSHOT  = 3
+_PAGE_APPS        = 4
+_PAGE_MEDIA       = 5
+_PAGE_FILES       = 6
+_PAGE_BACKUP      = 7
+# index 8 reserved for Screen Mirror (placeholder widget in stack)
+_PAGE_SETTINGS    = 9
 
 # (label, page_index_or_None, enabled)
 _NAV_ITEMS: list[tuple[str, int | None, bool]] = [
     ("Dashboard",        _PAGE_DASHBOARD,   True),
+    ("Troubleshoot",     _PAGE_TROUBLESHOOT, True),
     ("Diagnostics",      _PAGE_DIAGNOSTICS, True),
     ("Screenshot",       _PAGE_SCREENSHOT,  True),
     ("Apps",             _PAGE_APPS,        True),
@@ -125,23 +127,27 @@ class MainWindow(QMainWindow):
 
         self._stack = QStackedWidget()
         self._dash_page    = DashboardPage()
+        self._trouble_page = TroubleshootPage()
         self._diag_page    = DiagnosticsPage()
         self._shot_page    = ScreenshotPage()
         self._apps_page    = AppsPage()
         self._media_page   = MediaPage()
         self._files_page   = FilesPage()
         self._backup_page  = BackupRestorePage()
-        self._mirror_placeholder = QWidget()        # index 7 — reserved for Screen Mirror
+        self._mirror_placeholder = QWidget()        # index 8 — reserved for Screen Mirror
         self._settings_page = SettingsPage()
         self._stack.addWidget(self._dash_page)          # index 0
-        self._stack.addWidget(self._diag_page)          # index 1
-        self._stack.addWidget(self._shot_page)          # index 2
-        self._stack.addWidget(self._apps_page)          # index 3
-        self._stack.addWidget(self._media_page)         # index 4
-        self._stack.addWidget(self._files_page)         # index 5
-        self._stack.addWidget(self._backup_page)        # index 6
-        self._stack.addWidget(self._mirror_placeholder) # index 7
-        self._stack.addWidget(self._settings_page)      # index 8
+        self._stack.addWidget(self._trouble_page)       # index 1
+        self._stack.addWidget(self._diag_page)          # index 2
+        self._stack.addWidget(self._shot_page)          # index 3
+        self._stack.addWidget(self._apps_page)          # index 4
+        self._stack.addWidget(self._media_page)         # index 5
+        self._stack.addWidget(self._files_page)         # index 6
+        self._stack.addWidget(self._backup_page)        # index 7
+        self._stack.addWidget(self._mirror_placeholder) # index 8
+        self._stack.addWidget(self._settings_page)      # index 9
+        self._trouble_page.refresh_requested.connect(self._on_refresh)
+        self._trouble_page.action_requested.connect(self._on_troubleshoot_action)
         body_hbox.addWidget(self._stack)
 
         root_vbox.addWidget(body, stretch=1)
@@ -206,7 +212,7 @@ class MainWindow(QMainWindow):
         vbox.addStretch()
 
         # Version stamp
-        ver = QLabel("Milestone 7")
+        ver = QLabel("Milestone 8")
         ver.setAlignment(Qt.AlignCenter)
         ver.setStyleSheet("color: #2a2a2a; font-size: 10px; padding: 10px 0;")
         vbox.addWidget(ver)
@@ -283,6 +289,7 @@ class MainWindow(QMainWindow):
         self._log_msg(f"Device detected ({udid[:8]}…)  Reading info…")
         self._header.show_connecting()
         self._dash_page.show_connecting()
+        self._trouble_page.show_connecting()
         self._diag_page.show_connecting()
         self._shot_page.show_connecting()
         self._apps_page.show_connecting()
@@ -308,6 +315,7 @@ class MainWindow(QMainWindow):
             self._current_info = info
             self._header.show_device(info)
             self._dash_page.show_device(info)
+            self._trouble_page.show_device(info)
             self._update_tray_tooltip(info)
             self._notify_device_state(previous, info)
 
@@ -318,6 +326,7 @@ class MainWindow(QMainWindow):
             self._current_info = info
             self._header.show_device(info)
             self._dash_page.show_device(info)
+            self._trouble_page.show_device(info)
             self._diag_page.show_device(info)
             self._shot_page.show_device(info)
             self._apps_page.show_device(info)
@@ -336,6 +345,7 @@ class MainWindow(QMainWindow):
             self._log_msg(f"Could not read device: {result.error}")
             self._header.show_no_device()
             self._dash_page.show_no_device()
+            self._trouble_page.show_device_problem(result.error or "")
             self._diag_page.show_no_device()
             self._shot_page.show_no_device()
             self._apps_page.show_no_device()
@@ -349,6 +359,7 @@ class MainWindow(QMainWindow):
         self._log_msg("Device disconnected.")
         self._header.show_no_device()
         self._dash_page.show_no_device()
+        self._trouble_page.show_no_device()
         self._diag_page.show_no_device()
         self._shot_page.show_no_device()
         self._apps_page.show_no_device()
@@ -372,6 +383,22 @@ class MainWindow(QMainWindow):
         self._log_msg("Refresh requested.")
         self._current_info = None
         self._poll_device()
+
+    def _on_troubleshoot_action(self, action_id: str) -> None:
+        routes = {
+            "refresh": self._on_refresh,
+            "open_files": lambda: self._navigate(_PAGE_FILES),
+            "open_media": lambda: self._navigate(_PAGE_MEDIA),
+            "open_backup": lambda: self._navigate(_PAGE_BACKUP),
+            "open_screenshot": lambda: self._navigate(_PAGE_SCREENSHOT),
+            "open_diagnostics": lambda: self._navigate(_PAGE_DIAGNOSTICS),
+            "open_settings": lambda: self._navigate(_PAGE_SETTINGS),
+        }
+        handler = routes.get(action_id)
+        if handler is None:
+            self._log_msg(f"Troubleshoot action not yet wired: {action_id}")
+            return
+        handler()
 
     def _update_tray_tooltip(self, info: DeviceInfo) -> None:
         charge = "Charging" if info.battery_charging else "Battery"
@@ -450,6 +477,7 @@ class MainWindow(QMainWindow):
         if self._worker and self._worker.isRunning():
             self._worker.quit()
             self._worker.wait(2000)
+        self._trouble_page.abort_all()
         shot_worker = self._shot_page._worker
         if shot_worker and shot_worker.isRunning():
             shot_worker.quit()
