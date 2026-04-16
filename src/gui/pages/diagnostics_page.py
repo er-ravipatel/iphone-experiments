@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QTableWidget, QTableWidgetItem, QHeaderView,
     QFrame, QScrollArea, QPushButton, QSizePolicy,
-    QGridLayout,
+    QGridLayout, QAbstractScrollArea,
 )
 from PySide6.QtCore import Qt, QTimer, QThread, Signal, QSize
 from PySide6.QtGui import QColor, QFont, QPixmap, QImage
@@ -234,11 +234,23 @@ class DiagnosticsPage(QWidget):
         shot_vbox.setContentsMargins(6, 6, 6, 6)
         shot_vbox.setSpacing(4)
 
+        # Scrollable image area — scrollbars appear when screenshot taller than panel
+        self._shot_scroll = QScrollArea()
+        self._shot_scroll.setWidgetResizable(False)
+        self._shot_scroll.setAlignment(Qt.AlignHCenter | Qt.AlignTop)
+        self._shot_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self._shot_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self._shot_scroll.setStyleSheet(
+            "QScrollArea { border: none; background: transparent; }"
+            "QScrollArea > QWidget > QWidget { background: transparent; }"
+        )
+
         self._shot_lbl = QLabel("No screenshot yet")
         self._shot_lbl.setAlignment(Qt.AlignCenter)
         self._shot_lbl.setStyleSheet("color: #383838; font-size: 12px; background: transparent;")
-        self._shot_lbl.setMinimumHeight(180)
-        shot_vbox.addWidget(self._shot_lbl, stretch=1)
+        self._shot_lbl.setMinimumSize(180, 180)
+        self._shot_scroll.setWidget(self._shot_lbl)
+        shot_vbox.addWidget(self._shot_scroll, stretch=1)
 
         shot_ctrl = QHBoxLayout()
         self._shot_refresh_btn = QPushButton("Capture")
@@ -291,13 +303,11 @@ class DiagnosticsPage(QWidget):
         if img.isNull():
             self._shot_auto_lbl.setText("Bad image")
             return
-        # Scale to fit the label area preserving aspect ratio
-        avail_w = self._shot_lbl.width() or 260
-        avail_h = self._shot_lbl.height() or 400
-        px = QPixmap.fromImage(img).scaled(
-            avail_w, avail_h, Qt.KeepAspectRatio, Qt.SmoothTransformation
-        )
+        # Scale image to the viewport width; height overflows into the scrollbar
+        avail_w = self._shot_scroll.viewport().width() or 260
+        px = QPixmap.fromImage(img).scaledToWidth(avail_w, Qt.SmoothTransformation)
         self._shot_lbl.setPixmap(px)
+        self._shot_lbl.resize(px.size())
         self._shot_lbl.setText("")
         self._shot_auto_lbl.setText("Live  ●")
         self._shot_auto_lbl.setStyleSheet("color: #4caf50; font-size: 10px;")
@@ -339,6 +349,7 @@ class DiagnosticsPage(QWidget):
         self._stop_auto_screenshot()
         self._shot_refresh_btn.setEnabled(False)
         self._shot_lbl.setPixmap(QPixmap())
+        self._shot_lbl.resize(self._shot_lbl.minimumSize())
         self._shot_lbl.setText("No device connected")
         self._shot_auto_lbl.setText("")
         for tbl in (self._tbl_identity, self._tbl_hardware,
