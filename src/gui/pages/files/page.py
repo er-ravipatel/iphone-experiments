@@ -119,6 +119,7 @@ class FilesPage(QWidget):
         self._udid = None
         self._file_table.clear_entries()
         self._status_lbl.setText("No device connected")
+        self._crumb.set_root_label("📱 iPhone")
         self._crumb.set_path("/")
         self._up_btn.setEnabled(False)
         self._refresh_action_bar()
@@ -129,6 +130,7 @@ class FilesPage(QWidget):
         self._udid = None
         self._file_table.clear_entries()
         self._status_lbl.setText("Connecting…")
+        self._crumb.set_root_label("📱 iPhone")
         self._up_btn.setEnabled(False)
         self._refresh_action_bar()
 
@@ -140,6 +142,7 @@ class FilesPage(QWidget):
         self._current_path = "/"
         self._path_stack = []
         self._status_lbl.setText(info.name)
+        self._crumb.set_root_label(f"📱 {info.name}")
         self._list_current()
 
     def abort_all(self) -> None:

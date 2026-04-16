@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt
 
 from ....device.info import DeviceInfo
+from ..media._utils import open_system
 from ..media.widgets import GripSplitter
 from .backup_table import BackupTableWidget
 from .output_log import OutputLog
@@ -102,6 +103,7 @@ class BackupRestorePage(QWidget):
         self._action_bar.backup_requested.connect(self._on_new_backup)
         self._action_bar.restore_requested.connect(self._on_restore)
         self._action_bar.delete_requested.connect(self._on_delete)
+        self._action_bar.open_folder_requested.connect(self._on_open_folder)
         self._action_bar.cancel_requested.connect(self._on_cancel)
         outer.addWidget(self._action_bar)
 
@@ -258,6 +260,14 @@ class BackupRestorePage(QWidget):
             if w is not None and w.isRunning():
                 w.cancel()
         self._action_bar.set_op_label("Cancelling…")
+
+    def _on_open_folder(self) -> None:
+        """Open the selected backup's parent directory in the system file explorer."""
+        backup_path = self._backup_table.selected_backup()
+        if backup_path is None:
+            return
+        log.debug("BackupRestorePage: opening folder %s", backup_path)
+        open_system(str(backup_path))
 
     # ── Operation completion handlers ──────────────────────────────────────
 

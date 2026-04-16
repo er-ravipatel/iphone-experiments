@@ -10,6 +10,7 @@ backup_requested()
 restore_requested()
 delete_requested()
 cancel_requested()
+open_folder_requested()
 """
 from __future__ import annotations
 
@@ -34,10 +35,11 @@ class ActionBar(QWidget):
     the page calls set_state() after every relevant change.
     """
 
-    backup_requested:  Signal = Signal()
-    restore_requested: Signal = Signal()
-    delete_requested:  Signal = Signal()
-    cancel_requested:  Signal = Signal()
+    backup_requested:       Signal = Signal()
+    restore_requested:      Signal = Signal()
+    delete_requested:       Signal = Signal()
+    cancel_requested:       Signal = Signal()
+    open_folder_requested:  Signal = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -66,6 +68,7 @@ class ActionBar(QWidget):
         self._backup_btn.setEnabled(has_device and can_act)
         self._restore_btn.setEnabled(has_device and has_backup_sel and can_act)
         self._delete_btn.setEnabled(has_backup_sel and can_act)   # local-only, no device
+        self._open_folder_btn.setEnabled(has_backup_sel)          # always, regardless of busy
         self._cancel_btn.setEnabled(busy)
         self._cancel_btn.setStyleSheet(_CANCEL_STYLE_ON if busy else _CANCEL_STYLE_OFF)
 
@@ -84,13 +87,14 @@ class ActionBar(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
 
-        self._backup_btn  = self._make_btn("+ New Backup",  self.backup_requested)
-        self._restore_btn = self._make_btn("↩ Restore",     self.restore_requested)
-        self._delete_btn  = self._make_btn("🗑 Delete",      self.delete_requested)
-        self._cancel_btn  = self._make_btn("✕ Cancel",      self.cancel_requested)
+        self._backup_btn      = self._make_btn("+ New Backup",  self.backup_requested)
+        self._restore_btn     = self._make_btn("↩ Restore",     self.restore_requested)
+        self._delete_btn      = self._make_btn("🗑 Delete",      self.delete_requested)
+        self._open_folder_btn = self._make_btn("📂 Open Folder", self.open_folder_requested)
+        self._cancel_btn      = self._make_btn("✕ Cancel",      self.cancel_requested)
 
         for btn in (self._backup_btn, self._restore_btn,
-                    self._delete_btn, self._cancel_btn):
+                    self._delete_btn, self._open_folder_btn, self._cancel_btn):
             layout.addWidget(btn)
 
         layout.addStretch()

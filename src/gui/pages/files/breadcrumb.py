@@ -37,6 +37,7 @@ class BreadcrumbBar(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._current_path = "/"
+        self._root_label = "📱 iPhone"   # overridden via set_root_label()
         self._build_ui()
 
     # ── Public API ─────────────────────────────────────────────────────────
@@ -45,6 +46,11 @@ class BreadcrumbBar(QWidget):
         """Render breadcrumb for *path* (POSIX-style, e.g. '/DCIM/100APPLE')."""
         self._current_path = path
         self._render(path)
+
+    def set_root_label(self, label: str) -> None:
+        """Override the text shown for the root ('/') segment. Call with device name on connect."""
+        self._root_label = label
+        self._render(self._current_path)
 
     @property
     def current_path(self) -> str:
@@ -94,7 +100,7 @@ class BreadcrumbBar(QWidget):
                 item.widget().deleteLater()
 
         parts = [p for p in path.split("/") if p]
-        segments = [("/", "/")] + self._build_segments(parts)
+        segments = [(self._root_label, "/")] + self._build_segments(parts)
 
         for i, (label, target) in enumerate(segments):
             btn = QPushButton(label)
