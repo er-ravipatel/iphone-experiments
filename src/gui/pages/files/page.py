@@ -90,8 +90,15 @@ class FilesPage(QWidget):
         nav_row.addWidget(self._crumb, stretch=1)
 
         from PySide6.QtWidgets import QPushButton
-        self._up_btn = QPushButton("⬆ Up")
-        self._up_btn.setFixedSize(60, 32)
+        self._up_btn = QPushButton("⬆  Up")
+        self._up_btn.setFixedHeight(32)
+        self._up_btn.setMinimumWidth(80)
+        self._up_btn.setStyleSheet(
+            "QPushButton { color: #4fc3f7; border: 1px solid #4fc3f7;"
+            "  border-radius: 4px; padding: 4px 14px; background: transparent; }"
+            "QPushButton:hover { background: #0d2233; }"
+            "QPushButton:disabled { color: #333; border-color: #2a2a2a; }"
+        )
         self._up_btn.clicked.connect(self._go_up)
         nav_row.addWidget(self._up_btn)
         outer.addLayout(nav_row)
