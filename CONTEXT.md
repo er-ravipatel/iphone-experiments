@@ -3,7 +3,7 @@
 ## Active Workspace
 
 - Current working repo path: `C:\Workspace\Personal\iphone-experiments`
-- Current active branch: `feature-troubleshoot-page`
+- Current active branch: `feature-passcode-recovery-assistant`
 - This repo is the source of truth for ongoing work.
 
 ## Agent Handoff Summary
@@ -13,6 +13,13 @@
 - `TroubleshootPage` is being added near the top of the sidebar as a new diagnosis-focused page
 - `TroubleshootService` is the reusable logic layer for snapshots, issue detection, health summaries, and recommended actions
 - Current MVP issue coverage: no device, blocked device info / likely trust-unlock required, low storage, backup risk, developer mode off, screenshot readiness, mirror readiness, and missing critical tools
+
+**Current recovery-preparation session (2026-04-17):**
+- Branch: `feature-passcode-recovery-assistant`
+- Adding `Passcode Recovery` and `Recovery Mode Assistant` as guided recovery flows
+- The app explicitly does not bypass device passcodes or Activation Lock
+- Current goal is to prepare users for supported erase/restore and recovery-mode steps while surfacing local backup availability first
+- Next planned phase after this work: richer restore guidance, recovery-mode verification on real hardware, and eventually firmware/update workflow support
 
 **Last session completed (2026-04-16):**
 - **MediaPage SRP refactor** — `media_page.py` (1525 lines) decomposed into `src/gui/pages/media/` package (6 files)

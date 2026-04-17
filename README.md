@@ -7,19 +7,25 @@ The desktop roadmap is now centered on USB-based iPhone troubleshooting and reco
 
 - Active workspace path: `C:\Workspace\Personal\iphone-experiments`
 - Active repository: `iphone-experiments`
-- Active development branch: `feature-troubleshoot-page`
+- Active development branch: `feature-passcode-recovery-assistant`
 - Old mistaken workspace copy under `C:\Workspace\Personal\iphone-storage-explorer\iphone-experiments` is no longer active and has been removed.
 
 ## Agent Handoff
 
 - Source of truth: this repo and this workspace path
-- Branch to continue on by default: `feature-troubleshoot-page`
+- Branch to continue on by default: `feature-passcode-recovery-assistant`
 - Current troubleshooting milestone (2026-04-16):
   - The desktop app is now explicitly positioned as a USB-based iPhone troubleshooting and recovery tool
   - `TroubleshootPage` has been added near the top of the sidebar as a dedicated diagnosis surface
   - `TroubleshootService` builds reusable snapshots, issue cards, health summaries, and recommended action shortcuts
   - Current issue coverage: no device, blocked device info / likely trust-unlock required, low storage, backup risk, developer mode off, screenshot readiness, mirror readiness, and missing critical tools
   - Troubleshoot actions route into existing desktop pages like Files, Photos & Videos, Backup & Restore, Screenshot, Diagnostics, and Settings
+- Current recovery milestone (2026-04-17):
+  - `Passcode Recovery` and `Recovery Mode Assistant` are being added as guided recovery-preparation flows
+  - The app now distinguishes device passcode, Screen Time passcode, and recent-passcode-change situations
+  - Local backup availability is surfaced before users choose an erase/restore path
+  - The app explicitly does not bypass forgotten device passcodes or Activation Lock
+  - Next planned phase: richer restore guidance, recovery-mode verification on real hardware, and later firmware/update workflow support
 - Latest completed work (2026-04-12):
   - **DiagnosticsPage** fully redesigned — 3uTools-style layout with 4 categorised info tables (Identity, Hardware, Connectivity, Battery) + 5 status cards (Activation, iCloud Lock, Find My, Passcode, Developer Mode) + live screenshot panel
   - **DeviceInfo** extended with 15+ new fields: IMEI, IMEI2, MEID, ICCID, phone number, model number, hardware model, board ID, chip ID (hex), die ID, baseband, firmware, MLB serial, Find My lock (from NVRAM), passcode status, developer mode, battery external/full states
@@ -47,6 +53,8 @@ The desktop roadmap is now centered on USB-based iPhone troubleshooting and reco
 - System tray integration with device connect/disconnect notifications
 - Battery and storage status notifications for the connected device
 - Live device detection and auto-connect (polls every 2.5 s)
+- Passcode Recovery - guided flow for device passcode, Screen Time passcode, and recent passcode changes
+- Recovery Mode Assistant - model-family-aware recovery steps plus restore/update consequences
 - Troubleshoot â€” health banner, issue cards, recommended actions, and compact technical status
 - Dashboard — battery, storage, connectivity cards
 - Diagnostics — 3uTools-style layout:
@@ -151,12 +159,13 @@ For screenshot and mirroring-related developer services, you may also need:
 
 Current active branch for ongoing troubleshooting GUI work:
 
-- `feature-troubleshoot-page`
+- `feature-passcode-recovery-assistant`
 
 Feature branches are available for grouped areas of the project:
 
 - `feature-desktop-ui`
 - `feature-troubleshoot-page`
+- `feature-passcode-recovery-assistant`
 - `feature-files`
 - `feature-apps`
 - `feature-media`

@@ -32,6 +32,8 @@ class TroubleshootAction(str, Enum):
     OPEN_SCREENSHOT = "open_screenshot"
     OPEN_DIAGNOSTICS = "open_diagnostics"
     OPEN_SETTINGS = "open_settings"
+    OPEN_PASSCODE_RECOVERY = "open_passcode_recovery"
+    OPEN_RECOVERY_MODE = "open_recovery_mode"
 
 
 @dataclass(frozen=True)
@@ -165,8 +167,8 @@ class TroubleshootService:
                     severity=TroubleshootSeverity.CRITICAL,
                     summary="This usually means the iPhone is locked or waiting for the Trust prompt.",
                     details=snapshot.info_error or "Unlock the iPhone and tap Trust if prompted, then refresh.",
-                    recommended_action=TroubleshootAction.REFRESH,
-                    action_label="Refresh",
+                    recommended_action=TroubleshootAction.OPEN_PASSCODE_RECOVERY,
+                    action_label="Open Passcode Recovery",
                     is_blocking=True,
                 )
             )
@@ -177,9 +179,9 @@ class TroubleshootService:
                     severity=TroubleshootSeverity.WARNING,
                     summary="USB communication is limited until the device is unlocked and trusted.",
                     details="Look at the iPhone screen for a passcode prompt or a 'Trust This Computer' alert.",
-                    recommended_action=TroubleshootAction.OPEN_DIAGNOSTICS,
-                    action_label="Open Diagnostics",
-                    page_target="diagnostics",
+                    recommended_action=TroubleshootAction.OPEN_PASSCODE_RECOVERY,
+                    action_label="Open Passcode Recovery",
+                    page_target="passcode_recovery",
                 )
             )
             return issues

@@ -30,6 +30,8 @@ from .pages.apps_page import AppsPage
 from .pages.media import MediaPage
 from .pages.files import FilesPage
 from .pages.backup_restore import BackupRestorePage
+from .pages.passcode_recovery_page import PasscodeRecoveryPage
+from .pages.recovery_mode_page import RecoveryModePage
 from .pages.settings_page import SettingsPage
 
 
@@ -59,8 +61,10 @@ _PAGE_APPS        = 4
 _PAGE_MEDIA       = 5
 _PAGE_FILES       = 6
 _PAGE_BACKUP      = 7
-# index 8 reserved for Screen Mirror (placeholder widget in stack)
-_PAGE_SETTINGS    = 9
+_PAGE_PASSCODE_RECOVERY = 8
+_PAGE_RECOVERY_MODE = 9
+# index 10 reserved for Screen Mirror (placeholder widget in stack)
+_PAGE_SETTINGS    = 11
 
 # (label, page_index_or_None, enabled)
 _NAV_ITEMS: list[tuple[str, int | None, bool]] = [
@@ -134,6 +138,8 @@ class MainWindow(QMainWindow):
         self._media_page   = MediaPage()
         self._files_page   = FilesPage()
         self._backup_page  = BackupRestorePage()
+        self._passcode_page = PasscodeRecoveryPage()
+        self._recovery_page = RecoveryModePage()
         self._mirror_placeholder = QWidget()        # index 8 — reserved for Screen Mirror
         self._settings_page = SettingsPage()
         self._stack.addWidget(self._dash_page)          # index 0
@@ -144,10 +150,14 @@ class MainWindow(QMainWindow):
         self._stack.addWidget(self._media_page)         # index 5
         self._stack.addWidget(self._files_page)         # index 6
         self._stack.addWidget(self._backup_page)        # index 7
-        self._stack.addWidget(self._mirror_placeholder) # index 8
-        self._stack.addWidget(self._settings_page)      # index 9
+        self._stack.addWidget(self._passcode_page)      # index 8
+        self._stack.addWidget(self._recovery_page)      # index 9
+        self._stack.addWidget(self._mirror_placeholder) # index 10
+        self._stack.addWidget(self._settings_page)      # index 11
         self._trouble_page.refresh_requested.connect(self._on_refresh)
         self._trouble_page.action_requested.connect(self._on_troubleshoot_action)
+        self._passcode_page.action_requested.connect(self._on_recovery_action)
+        self._recovery_page.action_requested.connect(self._on_recovery_action)
         body_hbox.addWidget(self._stack)
 
         root_vbox.addWidget(body, stretch=1)
@@ -251,9 +261,13 @@ class MainWindow(QMainWindow):
         self._active_page = page_idx
         self._stack.setCurrentIndex(page_idx)
 
+        nav_page_idx = page_idx
+        if page_idx in {_PAGE_PASSCODE_RECOVERY, _PAGE_RECOVERY_MODE}:
+            nav_page_idx = _PAGE_TROUBLESHOOT
+
         for i, (_label, idx, enabled) in enumerate(_NAV_ITEMS):
             btn = self._nav_buttons[i]
-            btn.setChecked(enabled and idx == page_idx)
+            btn.setChecked(enabled and idx == nav_page_idx)
 
     # ── Device polling ──────────────────────────────────────────────────────
 
@@ -296,6 +310,8 @@ class MainWindow(QMainWindow):
         self._media_page.show_connecting()
         self._files_page.show_connecting()
         self._backup_page.show_connecting()
+        self._passcode_page.show_connecting()
+        self._recovery_page.show_connecting()
         self._settings_page.show_connecting()
 
         self._worker = _DeviceInfoWorker(udid, self._service)
@@ -316,6 +332,8 @@ class MainWindow(QMainWindow):
             self._header.show_device(info)
             self._dash_page.show_device(info)
             self._trouble_page.show_device(info)
+            self._passcode_page.show_device(info)
+            self._recovery_page.show_device(info)
             self._update_tray_tooltip(info)
             self._notify_device_state(previous, info)
 
@@ -333,6 +351,8 @@ class MainWindow(QMainWindow):
             self._media_page.show_device(info)
             self._files_page.show_device(info)
             self._backup_page.show_device(info)
+            self._passcode_page.show_device(info)
+            self._recovery_page.show_device(info)
             self._settings_page.show_device(info)
             self._update_tray_tooltip(info)
             self._log_msg(
@@ -352,6 +372,8 @@ class MainWindow(QMainWindow):
             self._media_page.show_no_device()
             self._files_page.show_no_device()
             self._backup_page.show_no_device()
+            self._passcode_page.show_no_device()
+            self._recovery_page.show_no_device()
             self._settings_page.show_no_device()
             self._tray.set_tooltip("iPhone Storage Explorer\nNo device connected")
 
@@ -366,6 +388,8 @@ class MainWindow(QMainWindow):
         self._media_page.show_no_device()
         self._files_page.show_no_device()
         self._backup_page.show_no_device()
+        self._passcode_page.show_no_device()
+        self._recovery_page.show_no_device()
         self._settings_page.show_no_device()
         if self._last_connected_udid is not None:
             self._tray.show_message(
@@ -393,10 +417,26 @@ class MainWindow(QMainWindow):
             "open_screenshot": lambda: self._navigate(_PAGE_SCREENSHOT),
             "open_diagnostics": lambda: self._navigate(_PAGE_DIAGNOSTICS),
             "open_settings": lambda: self._navigate(_PAGE_SETTINGS),
+            "open_passcode_recovery": lambda: self._navigate(_PAGE_PASSCODE_RECOVERY),
+            "open_recovery_mode": lambda: self._navigate(_PAGE_RECOVERY_MODE),
         }
         handler = routes.get(action_id)
         if handler is None:
             self._log_msg(f"Troubleshoot action not yet wired: {action_id}")
+            return
+        handler()
+
+    def _on_recovery_action(self, action_id: str) -> None:
+        routes = {
+            "refresh": self._on_refresh,
+            "open_backup": lambda: self._navigate(_PAGE_BACKUP),
+            "open_passcode_recovery": lambda: self._navigate(_PAGE_PASSCODE_RECOVERY),
+            "open_recovery_mode": lambda: self._navigate(_PAGE_RECOVERY_MODE),
+            "open_diagnostics": lambda: self._navigate(_PAGE_DIAGNOSTICS),
+        }
+        handler = routes.get(action_id)
+        if handler is None:
+            self._log_msg(f"Recovery action not yet wired: {action_id}")
             return
         handler()
 
@@ -478,6 +518,8 @@ class MainWindow(QMainWindow):
             self._worker.quit()
             self._worker.wait(2000)
         self._trouble_page.abort_all()
+        self._passcode_page.abort_all()
+        self._recovery_page.abort_all()
         shot_worker = self._shot_page._worker
         if shot_worker and shot_worker.isRunning():
             shot_worker.quit()
